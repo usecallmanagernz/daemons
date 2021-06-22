@@ -1,0 +1,255 @@
+#!/usr/bin/python3
+#
+# Copyright (c) 2021 Gareth Palmer <gareth.palmer3@gmail.com>
+# This program is free software, distributed under the terms of
+# the GNU General Public License Version 2.
+
+import sys
+import os.path
+import re
+import getopt
+import traceback
+import socket
+import ssl
+import struct
+
+import cryptography.hazmat.backends as backends
+import cryptography.x509 as x509
+from cryptography.hazmat.primitives import serialization
+
+
+REQUEST_DEVICE_MODEL = 1
+REQUEST_CERTIFICATE = 2
+
+RESPONSE_STATUS = 7
+RESPONSE_ROLES = 8
+RESPONSE_TTL = 9
+
+STATUS_VALID = 0
+STATUS_INVALID = 1
+
+ROLE_SAST = 0
+ROLE_CCM = 1
+ROLE_CCM_TFTP = 2
+ROLE_TFTP = 3
+ROLE_CAPF = 4
+ROLE_APP_SERVER = 7
+ROLE_TVS = 21
+
+
+class ProgramError(Exception):
+    pass
+
+
+def query_tvs(hostname, port, timeout, tvs_certificate_file, certificate_file):
+    try:
+        with open(certificate_file, 'rb') as file:
+            certificate = file.read()
+
+    except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
+        raise ProgramError(f'{error.strerror}: {error.filename}')
+
+    try:
+        certificate = x509.load_pem_x509_certificate(certificate, backends.default_backend())
+    except ValueError:
+        raise ProgramError(f'No certificate in file: {certificate_file}')
+
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+    try:
+        ssl_context.load_verify_locations(cafile = tvs_certificate_file)
+    except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
+        raise ProgramError(f'Unable to load {tvs_certificate_file}: {error.strerror}')
+
+    ssl_context.verify_mode = ssl.CERT_REQUIRED
+    ssl_context.check_hostname = False
+
+    try:
+        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client_socket.settimeout(timeout)
+
+        client_socket = ssl_context.wrap_socket(client_socket)
+        client_socket.connect((hostname, port))
+
+        tvs_request = bytearray()
+
+        tvs_request += struct.pack('B B B B', 87, 1, 1, 0) # Magic and version?
+        tvs_request += struct.pack('> I', 1001) # Unknown
+        tvs_request += struct.pack('> H', 0)
+
+        device_model = struct.pack('B', 1) + b'CP-0000-SEP000000000000'
+
+        tvs_request += struct.pack('> B H', REQUEST_DEVICE_MODEL, len(device_model))
+        tvs_request += device_model
+
+        certificate = certificate.public_bytes(serialization.Encoding.DER)
+
+        tvs_request += struct.pack('> B H', REQUEST_CERTIFICATE, len(certificate))
+        tvs_request += certificate
+
+        struct.pack_into('> H', tvs_request, 8, len(tvs_request) - 10)
+        tvs_request = bytes(tvs_request)
+
+        client_socket.send(tvs_request)
+        tvs_response = client_socket.recv(10)
+
+        if len(tvs_response) != 10:
+            raise ProgramError(f'Wrong header length: {len(tvs_response)}')
+
+        (length,) = struct.unpack_from('> H', tvs_response, 8)
+
+        while len(tvs_response) < (length + 10):
+            tvs_response += client_socket.recv((length + 10) - len(tvs_response))
+
+        tvs_index = 10
+
+        while tvs_index < len(tvs_response):
+            (tag, length) = struct.unpack_from('> B H', tvs_response, tvs_index)
+            tvs_index += 3
+
+            if tag == RESPONSE_STATUS:
+                if length != 1:
+                    raise ProgramError(f'Invalid RESPONSE_STATUS length: {length}')
+
+                (status,) = struct.unpack_from('B', tvs_response, tvs_index)
+                tvs_index += length
+
+                print('Status: ', end = '')
+
+                if status == STATUS_VALID:
+                    print('Valid')
+                else:
+                    print('Invalid')
+
+            elif tag == RESPONSE_ROLES:
+                roles = tvs_response[tvs_index:tvs_index + length]
+                tvs_index += length
+
+                for role in roles:
+                    print('Role:   ', end = '')
+
+                    if role == ROLE_SAST:
+                        print('SAST')
+                    elif role == ROLE_CCM:
+                        print('CCM')
+                    elif role == ROLE_CCM_TFTP:
+                        print('CCM+TFTP')
+                    elif role == ROLE_TFTP:
+                        print('TFTP')
+                    elif role == ROLE_CAPF:
+                        print('CAPF')
+                    elif role == ROLE_APP_SERVER:
+                        print('APP-SERVER')
+                    elif role == ROLE_TVS:
+                        print('TVS')
+                    else:
+                        print(f'{role}')
+
+            elif tag == RESPONSE_TTL:
+                if length != 4:
+                    raise ProgramError(f'Invalid RESPONSE_TTL length: {length}')
+
+                (ttl,) = struct.unpack_from('> I', tvs_response, tvs_index)
+                tvs_index += length
+
+                print(f'TTL:    {ttl} seconds')
+
+            else:
+                raise ProgramError(f'Unknown tag: {tag}')
+
+    except ssl.SSLError as error:
+        raise ProgramError(error.reason)
+
+    except OSError as error:
+        raise ProgramError(error.strerror)
+
+    client_socket.close()
+
+
+def main():
+    try:
+        short_options = 'h:p:t:T:H'
+        long_options = ['host=', 'port=', 'timeout=', 'tvs=', 'help']
+
+        try:
+            options, arguments = getopt.gnu_getopt(sys.argv[1:], short_options, long_options)
+        except getopt.GetoptError as error:
+            raise ProgramError(error.msg[0].upper() + error.msg[1:])
+
+        hostname = None
+        port = 2445
+        timeout = 10
+        tvs_certificate_file = None
+        help = False
+
+        for option, argument in options:
+            if option in ('-h', '--host'):
+                hostname = argument
+
+                if not re.search(r'(?xi) ^ (?: [a-z0-9\-]+ \.)* [a-z0-9\-]+ $', hostname):
+                    raise ProgramError(f'Invalid host: {hostname}')
+
+            elif option in ('-p', '--port'):
+                port = argument
+
+                try:
+                    port = int(port)
+
+                    if port < 0 or port > 65535:
+                        raise ValueError
+
+                except ValueError:
+                    raise ProgramError(f'Invalid port: {port}')
+
+            elif option in ('-t', '--timeout'):
+                timeout = argument
+
+                try:
+                    timeout = int(timeout)
+                except ValueError:
+                    raise ProgramError(f'Invalid timeout: {timeout}')
+
+            elif option in ('-T', '--tvs'):
+                tvs_certificate_file = argument
+
+            elif option in ('-H', '--help'):
+                help = True
+
+        if help:
+            print('Usage: ' + os.path.basename(sys.argv[0]) + ' [OPTIONS] [CERT-FILE]\n'
+                  'Query the validity of a certificate using a TVS server.\n'
+                  '\n'
+                  '  -h, --host HOSTNAME                host name or IP-address of the TVS server\n'
+                  '  -p, --port PORT                    port TVS server is listening on (default 2445)\n'
+                  '  -t, --timeout TIMEOUT              request timeout in seconds (default 10)\n'
+                  '  -T, --tvs TVS-CERT-FILE            TVS server certificate\n'
+                  '  -H, --help                         print this help and exit\n')
+
+            return
+
+        if not len(arguments):
+            raise ProgramError('No query certificate file specified')
+
+        certificate_file = arguments[0]
+
+        if hostname is None:
+            raise ProgramError('No host specified')
+
+        if tvs_certificate_file is None:
+            raise ProgramError('No TVS certificate specified')
+
+        query_tvs(hostname, port, timeout, tvs_certificate_file, certificate_file)
+
+    except ProgramError as error:
+        print(str(error), file = sys.stderr)
+        exit(1)
+
+    except Exception:
+        traceback.print_exc(file = sys.stderr)
+        exit(1)
+
+    exit(0)
+
+
+if __name__ == '__main__':
+    main()

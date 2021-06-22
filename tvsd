@@ -1,0 +1,334 @@
+#!/usr/bin/python3
+
+import sys
+import os.path
+import socket
+import select
+import ssl
+import getopt
+import traceback
+import threading
+import signal
+import logging
+import struct
+import binascii
+import sqlite3
+
+import cryptography.hazmat.backends as backends
+import cryptography.x509 as x509
+from cryptography.hazmat.primitives import hashes
+
+
+REQUEST_DEVICE_MODEL = 1
+REQUEST_CERTIFICATE = 2
+
+RESPONSE_STATUS = 7
+RESPONSE_ROLES = 8
+RESPONSE_TTL = 9
+
+STATUS_VALID = 0
+STATUS_INVALID = 1
+
+ROLE_SAST = 0
+ROLE_CCM = 1
+ROLE_CCM_TFTP = 2
+ROLE_TFTP = 3
+ROLE_CAPF = 4
+ROLE_APP_SERVER = 7
+ROLE_TVS = 21
+
+
+logging.basicConfig(level = logging.DEBUG, format = '%(message)s', stream = sys.stdout, force = True)
+
+
+class ProgramError(Exception):
+    pass
+
+
+def handle_client(client_socket, database_file, default_ttl):
+    ip_address, port = client_socket.getpeername()
+    cipher = client_socket.cipher()[0]
+
+    logging.info('Connect from %s:%d using %s', ip_address, port, cipher)
+
+    try:
+        tvs_request = client_socket.recv(10)
+
+        if len(tvs_request) != 10:
+            raise ProgramError(f'Wrong header length: {len(tvs_request)}')
+
+        (length,) = struct.unpack_from('> H', tvs_request, 8)
+
+        while len(tvs_request) < (length + 10):
+            tvs_request += client_socket.recv((length + 10) - len(tvs_request))
+
+        tvs_index = 10
+        device_model = None
+        certificate = None
+
+        while tvs_index < len(tvs_request):
+            (tag, length) = struct.unpack_from('> B H', tvs_request, tvs_index)
+            tvs_index += 3
+
+            if tag == REQUEST_DEVICE_MODEL:
+                device_model = tvs_request[tvs_index:tvs_index + length]
+                tvs_index += length
+
+                device_model = device_model[1:].decode('utf-8') # First byte is version?
+
+            elif tag == REQUEST_CERTIFICATE:
+                certificate = tvs_request[tvs_index:tvs_index + length]
+                tvs_index += length
+
+            else:
+                raise ProgramError(f'Unknown tag: {tag}')
+
+        tvs_response = bytearray()
+
+        tvs_response += struct.pack('B B B B', 87, 1, 2, 245) # Magic and version??
+        tvs_response += struct.pack('> I', 1001) # Unknown
+        tvs_response += struct.pack('> H', 0)
+
+        try:
+            if device_model is None:
+                raise ValueError('No device model')
+
+            if certificate is None:
+                raise ValueError('No certificate')
+
+            logging.info('Device model: %s', device_model)
+
+            try:
+                certificate = x509.load_der_x509_certificate(certificate, backends.default_backend())
+            except ValueError:
+                raise ValueError('Invalid certificate')
+
+            certificate_hash = certificate.fingerprint(hashes.SHA256())
+            certificate_hash = binascii.hexlify(certificate_hash).decode('utf-8')
+
+            logging.info('Certificate hash: %s', certificate_hash)
+
+            subject_name = ''
+
+            for attribute in certificate.subject:
+                subject_name += (';' if len(subject_name) else '') + attribute.rfc4514_string()
+
+            logging.info('Subject name: %s', subject_name)
+
+            with sqlite3.connect(database_file) as database:
+                database.row_factory = sqlite3.Row
+                cursor = database.cursor()
+
+                cursor.execute('SELECT roles, ttl FROM certificates WHERE certificate_hash = ?',
+                               (certificate_hash,))
+
+                row = cursor.fetchone()
+
+                if row is not None:
+                    (roles, ttl) = row
+
+                    logging.info('Status: Valid')
+                    logging.info('Roles: %s', roles)
+                    logging.info('TTL: %d', ttl or default_ttl)
+
+                    tvs_response += struct.pack('> B H B', RESPONSE_STATUS, 1, STATUS_VALID)
+
+                    roles = roles.split(',')
+                    tvs_response += struct.pack('> B H', RESPONSE_ROLES, len(roles))
+
+                    for role in roles:
+                        if role == 'SAST':
+                            tvs_response += struct.pack('B', ROLE_SAST)
+                        elif role == 'CCM':
+                            tvs_response += struct.pack('B', ROLE_CCM)
+                        elif role == 'CCM+TFTP':
+                            tvs_response += struct.pack('B', ROLE_CCM_TFTP)
+                        elif role == 'TFTP':
+                            tvs_response += struct.pack('B', ROLE_TFTP)
+                        elif role == 'CAPF':
+                            tvs_response += struct.pack('B', ROLE_CAPF)
+                        elif role == 'APP-SERVER':
+                            tvs_response += struct.pack('B', ROLE_APP_SERVER)
+                        elif role == 'TVS':
+                            tvs_response += struct.pack('B', ROLE_TVS)
+                        else:
+                            tvs_response += struct.pack('B', 255)
+
+                    if ttl is None:
+                        ttl = default_ttl
+
+                    tvs_response += struct.pack('> B H I', RESPONSE_TTL, 4, ttl)
+                else:
+                    logging.info('Status: Invalid')
+
+                    tvs_response += struct.pack('> B H B', RESPONSE_STATUS, 1, STATUS_INVALID)
+
+        except Exception as error:
+            logging.error('%s', str(error))
+
+            tvs_response += struct.pack('> B H B', RESPONSE_STATUS, 1, STATUS_INVALID)
+
+        struct.pack_into('> H', tvs_response, 8, len(tvs_response) - 10)
+        client_socket.send(tvs_response)
+
+    except OSError as error:
+        logging.error('%s', error.strerror)
+
+    except Exception as error:
+        logging.error('%s', str(error))
+
+    client_socket.close()
+    logging.info('Disconnected')
+
+
+def start_server(port, timeout, tvs_certificate_file, database_file, default_ttl):
+    try:
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+
+        ssl_context.load_cert_chain(tvs_certificate_file)
+        ssl_context.verify_mode = ssl.CERT_NONE
+
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket = ssl_context.wrap_socket(server_socket, server_side = True)
+
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, True)
+        server_socket.bind(('0.0.0.0', port))
+
+        server_socket.settimeout(timeout)
+        server_socket.listen(5)
+
+    except ssl.SSLError as error:
+        raise ProgramError(error.reason)
+
+    except OSError as error:
+        raise ProgramError(error)
+
+    logging.info('Started listening on %d', port)
+
+    poll = select.poll()
+    poll.register(server_socket.fileno(), select.POLLIN)
+
+    for signum in signal.SIGINT, signal.SIGQUIT, signal.SIGTERM:
+        signal.signal(signum, stop_server)
+
+    try:
+        while True:
+            events = poll.poll()
+
+            for fileno, event in events:
+                if fileno != server_socket.fileno() or not event & select.POLLIN:
+                    continue
+
+                try:
+                    client_socket, unused = server_socket.accept()
+
+                except OSError as error:
+                    logging.error('%s', str(error))
+                    continue
+
+                thread = threading.Thread(daemon = True, target = handle_client, args = (client_socket, database_file, default_ttl))
+                thread.start()
+
+    except InterruptedError:
+        pass
+
+    server_socket.close()
+    logging.info('Stopped listening')
+
+
+def stop_server(signum, frame):
+    raise InterruptedError
+
+
+def main():
+    try:
+        short_options = 'p:t:T:L:H'
+        long_options = ['port=', 'timeout=', 'tvs=', 'ttl=', 'help']
+
+        try:
+            options, arguments = getopt.gnu_getopt(sys.argv[1:], short_options, long_options)
+        except getopt.GetoptError as error:
+            raise ProgramError(error.msg[0].upper() + error.msg[1:])
+
+        port = 2445
+        timeout = 10
+        default_ttl = 86400
+        tvs_certificate_file = None
+        database_file = None
+        help = False
+
+        for option, argument in options:
+            if option in ('-p', '--port'):
+                port = argument
+
+                try:
+                    port = int(port)
+
+                    if port < 0 or port > 65535:
+                        raise ValueError
+
+                except ValueError:
+                    raise ProgramError(f'Invalid port: {port}')
+
+            elif option in ('-t', '--timeout'):
+                timeout = argument
+
+                try:
+                    timeout = int(timeout)
+                except ValueError:
+                    raise ProgramError(f'Invalid timeout: {timeout}')
+
+            elif option in ('-L', '--ttl'):
+                ttl = argument
+
+                try:
+                    ttl = int(ttl)
+                except ValueError:
+                    raise ProgramError(f'Invalid ttl: {ttl}')
+
+                if ttl < 0 or ttl > 2592000:
+                    raise ProgramError(f'TTL must be between 1 and 2592000')
+
+            elif option in ('-T', '--tvs'):
+                tvs_certificate_file = argument
+
+            elif option in ('-H', '--help'):
+                help = True
+
+        if help:
+            print('Usage: ' + os.path.basename(sys.argv[0]) + ' [OPTIONS] [DATABASE-FILE]\n'
+                  'Query the validity of a certificate using a TVS server.\n'
+                  '\n'
+                  '  -T, --tvs TVS-CERT-FILE         TVS server certificate\n'
+                  '  -p, --port PORT                 port TVS server is listening on (default 2445)\n'
+                  '  -t, --timeout TIMEOUT           connection timeout in seconds (default 10)\n'
+                  '  -L, --ttl LIFETIME              default response validity lifetime\n'
+                  '  -H, --help                      print this help and exit\n'
+                  '\n'
+                  'DATABASE-FILE can be created and managed using the tvsctl program.\n')
+
+            return
+
+        if not len(arguments):
+            raise ProgramError('No database file specified')
+
+        database_file = arguments[0]
+
+        if tvs_certificate_file is None:
+            raise ProgramError('No TVS certificate .pem file specified')
+
+        start_server(port, timeout, tvs_certificate_file, database_file, default_ttl)
+
+    except ProgramError as error:
+        logging.error('%s', str(error))
+        exit(1)
+
+    except Exception:
+        logging.error('%s', traceback.format_exc())
+        exit(1)
+
+    exit(0)
+
+
+if __name__ == '__main__':
+    main()

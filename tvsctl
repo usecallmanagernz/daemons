@@ -1,0 +1,297 @@
+#!/usr/bin/python3
+#
+# Copyright (c) 2021 Gareth Palmer <gareth.palmer3@gmail.com>
+# This program is free software, distributed under the terms of
+# the GNU General Public License Version 2.
+
+import sys
+import os
+import os.path
+import getopt
+import traceback
+import binascii
+import sqlite3
+
+import cryptography.hazmat.backends as backends
+import cryptography.x509 as x509
+from cryptography.hazmat.primitives import hashes, serialization
+
+
+ROLE_SAST = 0
+ROLE_CCM = 1
+ROLE_CCM_TFTP = 2
+ROLE_TFTP = 3
+ROLE_CAPF = 4
+ROLE_APP_SERVER = 7
+ROLE_TVS = 21
+
+
+class ProgramError(Exception):
+    pass
+
+
+def initalise_database(database):
+    cursor = database.cursor()
+
+    cursor.execute('CREATE TABLE certificates ('
+                   'certificate_hash TEXT PRIMARY KEY,'
+                   'serial_number TEXT NOT NULL UNIQUE,'
+                   'subject_name TEXT NOT NULL,'
+                   'certificate TEXT NOT NULL,'
+                   'roles TEXT NOT NULL,'
+                   'ttl INTEGER'
+                   ')')
+
+    database.commit()
+
+
+role_names = {
+    'SAST': ROLE_SAST,
+    'CCM': ROLE_CCM,
+    'CCM+TFTP': ROLE_CCM_TFTP,
+    'TFTP': ROLE_TFTP,
+    'CAPF': ROLE_CAPF,
+    'APP-SERVER': ROLE_APP_SERVER,
+    'TVS': ROLE_TVS
+}
+
+
+def insert_certificate(database, certificate_file, roles, ttl):
+    try:
+        with open(certificate_file, 'rb') as file:
+            certificate = file.read()
+
+    except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
+        raise ProgramError(f'{error.strerror}: {error.filename}')
+
+    try:
+        certificate = x509.load_pem_x509_certificate(certificate, backends.default_backend())
+    except ValueError:
+        raise ProgramError(f'No certificate in file: {certificate_file}')
+
+    certificate_hash = certificate.fingerprint(hashes.SHA256())
+    certificate_hash = binascii.hexlify(certificate_hash).decode('utf-8')
+
+    serial_number = serial_number = certificate.serial_number
+    serial_number = serial_number.to_bytes((serial_number.bit_length() + 7) // 8, byteorder = 'big')
+    serial_number = binascii.hexlify(serial_number).decode('utf-8')
+
+    subject_name = ''
+
+    for attribute in certificate.subject:
+        subject_name += (';' if len(subject_name) else '') + attribute.rfc4514_string()
+
+    roles = ','.join(sorted(roles, key = lambda role: role_names[role]))
+    cursor = database.cursor()
+
+    cursor.execute('INSERT OR REPLACE INTO certificates (certificate_hash, serial_number, subject_name, certificate, roles, ttl)\n'
+                   'VALUES (?, ?, ?, ?, ?, ?)',
+                   (certificate_hash, serial_number, subject_name, certificate.public_bytes(serialization.Encoding.PEM), roles, ttl))
+
+    database.commit()
+
+    print(f'Inserted {subject_name}: {roles}')
+
+
+def delete_certificate(database, serial_number):
+    cursor = database.cursor()
+
+    # RETURNING clause only available in sqlite >= 3.35
+    cursor.execute('SELECT subject_name, roles FROM certificates WHERE serial_number = ?',
+                   (serial_number,))
+
+    row = cursor.fetchone()
+
+    if row is None:
+        print(f'No certificate with serial number: {serial_number}')
+        return
+
+    (subject_name, roles) = row
+
+    cursor.execute('DELETE FROM certificates WHERE serial_number = ?',
+                   (serial_number,))
+
+    database.commit()
+
+    print(f'Deleted {subject_name}: {roles}')
+
+
+def export_certificate(database, serial_number):
+    cursor = database.cursor()
+
+    cursor.execute('SELECT certificate FROM certificates WHERE serial_number = ?',
+                   (serial_number,))
+
+    row = cursor.fetchone()
+
+    if row is None:
+        print(f'No certificate with serial number: {serial_number}')
+        return
+
+    (certificate,) = row
+
+    print(certificate.decode('utf-8'), end = '')
+
+
+def list_certificates(database):
+    cursor = database.cursor()
+
+    cursor.execute('SELECT certificate_hash, serial_number, subject_name, roles, ttl FROM certificates\n'
+                   'ORDER BY subject_name ASC')
+
+    rows = cursor.fetchall()
+
+    if not len(rows):
+        print('No certificates in database')
+        return
+
+    for row in rows:
+        (certificate_hash, serial_number, subject_name, roles, ttl) = row
+
+        print(f'Serial Number:    {serial_number}')
+        print(f'Subject Name:     {subject_name}')
+
+        for role in roles.split(','):
+            print(f'Role:             {role}')
+
+        if ttl:
+            print(f'TTL:              {ttl}')
+
+        print(f'Certificate Hash: {certificate_hash}')
+        print('')
+
+
+def main():
+    try:
+        short_options = 'i:d:e:lL:scCtAaTH'
+        long_options = ['insert=', 'delete=', 'export=', 'list', 'ttl=', 'sast', 'ccm', 'ccm-tftp', 'tftp', 'capf', 'app-server', 'tvs', 'help']
+
+        try:
+            options, arguments = getopt.gnu_getopt(sys.argv[1:], short_options, long_options)
+        except getopt.GetoptError as error:
+            raise ProgramError(error.msg[0].upper() + error.msg[1:])
+
+        mode = None
+        database_file = None
+        certificate_file = None
+        roles = set()
+        ttl = None
+        help = False
+
+        for option, argument in options:
+            if option in ('-i', '--insert'):
+                mode = 'insert'
+                certificate_file = argument
+
+            elif option in ('-d', '--delete'):
+                mode = 'delete'
+                serial_number = argument
+
+            elif option in ('-e', '--export'):
+                mode = 'export'
+                serial_number = argument
+
+            elif option in ('-l', '--list'):
+                mode = 'list'
+
+            elif option in ('-L', '--ttl'):
+                ttl = argument
+
+                try:
+                    ttl = int(ttl)
+                except ValueError:
+                    raise ProgramError(f'Invalid ttl: {ttl}')
+
+                if ttl < 0 or ttl > 2592000:
+                    raise ProgramError(f'TTL must be between 1 and 2592000')
+
+            elif option in ('-s', '--sast'):
+                roles.add('SAST')
+
+            elif option in ('-c', '--ccm'):
+                roles.add('CCM')
+
+            elif option in ('-C', '--ccm-tftp'):
+                roles.add('CCM+TFTP')
+
+            elif option in ('-t', '--tftp'):
+                roles.add('TFTP')
+
+            elif option in ('-A', '--capf'):
+                roles.add('CAPF')
+
+            elif option in ('-a', '--app-server'):
+                roles.add('APP-SERVER')
+
+            elif option in ('-T', '--tvs'):
+                roles.add('TVS')
+
+            elif option in ('-H', '--help'):
+                help = True
+
+        if help:
+            print('Usage: ' + os.path.basename(sys.argv[0]) + ' [OPTIONS] [DATABASE-FILE]\n'
+                  'Manage the certificate database for TVS.\n'
+                  '\n'
+                  '  -l, --list                      list certificates\n'
+                  '  -i, --insert CERT-FILE          insert/replace certificate and roles into database\n'
+                  '  -s, --sast                      insert certificate with the SAST role\n'
+                  '  -c, --ccm                       insert certificate with CCM role\n'
+                  '  -t, --tftp                      insert certificate with TFTP role\n'
+                  '  -C, --ccm-tftp                  insert certificate with CCM+TFTP role\n'
+                  '  -A, --capf                      insert certificate with CAPF role\n'
+                  '  -a, --app-server                insert certificate with APP-SERVER role\n'
+                  '  -T, --tvs                       insert certificate with TVS role\n'
+                  '  -L, --ttl LIFETIME              response validity lifetime\n'
+                  '  -d, --delete SERIAL-NUMBER      delete certificate from database\n'
+                  '  -e, --export SERIAL-NUMBER      export certificate from database\n'
+                  '  -H, --help                      print this help and exit\n'
+                  '\n'
+                  'DATABASE-FILE will be automatically created if it does not exist.\n'
+                  'Inserting a certificate that already exists will overwrite that entry.\n')
+
+            return
+
+        if mode is None:
+            raise ProgramError('No mode specified (insert, delete, export or list). Try --help')
+
+        if not len(arguments):
+            raise ProgramError('No database file specified')
+
+        database_file = arguments[0]
+
+        with sqlite3.connect(database_file) as database:
+            # Empty database
+            if not os.path.getsize(database_file):
+                initalise_database(database)
+
+            database.row_factory = sqlite3.Row
+
+            if mode == 'insert':
+                if not len(roles):
+                    raise ProgramError('No roles specified')
+
+                insert_certificate(database, certificate_file, roles, ttl)
+
+            elif mode == 'delete':
+                delete_certificate(database, serial_number)
+
+            elif mode == 'export':
+                export_certificate(database, serial_number)
+
+            elif mode == 'list':
+                list_certificates(database)
+
+    except ProgramError as error:
+        print(str(error), file = sys.stderr)
+        exit(1)
+
+    except Exception:
+        traceback.print_exc(file = sys.stderr)
+        exit(1)
+
+    exit(0)
+
+
+if __name__ == '__main__':
+    main()

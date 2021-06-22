@@ -1,0 +1,35 @@
+name: python lint
+  
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - tvsc 
+      - tvsd
+      - tlsctl
+
+  pull_request:
+    branches:
+      - master
+    paths:
+      - tvsc
+      - tvsd
+      - tlsctl
+
+jobs:
+  lint:
+    name: Run python linter
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Install packages
+        run: |
+          sudo apt install pylint python3-cryptography
+
+      - name: Run pylint 
+        run: |
+          pylint tvsd tvsc tvsctl 
