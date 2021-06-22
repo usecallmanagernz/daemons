@@ -4,9 +4,9 @@
 
 Services and clients that do security services for phones
 
-* `tvsd` - Server that responses to verification requests from phones. 
-* `tvsctl` - Utility to mange the certificate database used by `tvsd`.
-* `tvsc` - Client that can sends requests to the tvsd server. 
+* `tvsd` - Server that responds to TVS requests. 
+* `tvsctl` - Mange the certificate database used by `tvsd`.
+* `tvsc` - Client that can send TVS requests. 
 
 See [Trust Verification](http://usecallmanager.nz/trust-verification.html) for
 example usage.

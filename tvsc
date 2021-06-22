@@ -219,7 +219,7 @@ def main():
             print('Usage: ' + os.path.basename(sys.argv[0]) + ' [OPTIONS] [CERT-FILE]\n'
                   'Query the validity of a certificate using a TVS server.\n'
                   '\n'
-                  '  -h, --host HOSTNAME                host name or IP-address of the TVS server\n'
+                  '  -h, --host HOST                    host name or IP address of the TVS server\n'
                   '  -p, --port PORT                    port TVS server is listening on (default 2445)\n'
                   '  -t, --timeout TIMEOUT              request timeout in seconds (default 10)\n'
                   '  -T, --tvs TVS-CERT-FILE            TVS server certificate\n'
