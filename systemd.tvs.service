@@ -1,0 +1,13 @@
+[Unit]
+Description=Trust Verification Service
+Documentation=https://usecallmanager.nz/trust-verification.html
+ConditionPathExists=/var/lib/tvs/cert.db
+ConditionPathExists=/var/lib/tvs/tvs.pem
+After=network.target
+
+[Service]
+User=tvs
+ExecStart=/usr/bin/tvsd /var/lib/tvs/cert.db -T /var/lib/tvs/tvs.pem
+
+[Install]
+WantedBy=multi-user.target
