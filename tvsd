@@ -183,19 +183,24 @@ def handle_client(client_socket, database_file, default_ttl):
 
 
 def start_server(port, timeout, tvs_certificate_file, database_file, default_ttl):
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+
     try:
-        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-
         ssl_context.load_cert_chain(tvs_certificate_file)
-        ssl_context.verify_mode = ssl.CERT_NONE
+    except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
+        raise ProgramError(f'{error.strerror}: {error.filename}')
 
+    ssl_context.verify_mode = ssl.CERT_NONE
+
+    try:
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.settimeout(timeout)
+
         server_socket = ssl_context.wrap_socket(server_socket, server_side = True)
 
         server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, True)
         server_socket.bind(('0.0.0.0', port))
 
-        server_socket.settimeout(timeout)
         server_socket.listen(5)
 
     except ssl.SSLError as error:
