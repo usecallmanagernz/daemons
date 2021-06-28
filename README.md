@@ -1,4 +1,4 @@
-[![python lint](https://github.com/usecallmanagernz/daemons/actions/workflows/pylint.yml/badge.svg?branch=master)](https://github.com/usecallmanagernz/daemons/actions/workflows/pylint.yml) ![GitHub tag (latest SemVer)](https://img.shields.io/github/v/tag/usecallmanagernz/daemons?color=blue&label=version&sort=semver)
+![GitHub Workflow Status (branch)](https://img.shields.io/github/workflow/status/usecallmanagernz/daemons/python%20lint/master?label=python%20lint) ![GitHub tag (latest SemVer)](https://img.shields.io/github/v/tag/usecallmanagernz/daemons?color=blue&label=version&sort=semver)
 
 # Security Daemons 
 
