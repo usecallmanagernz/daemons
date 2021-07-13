@@ -12,8 +12,8 @@ import traceback
 import binascii
 import sqlite3
 
-import cryptography.hazmat.backends as backends
-import cryptography.x509 as x509
+from cryptography import x509
+from cryptography.hazmat import backends
 from cryptography.hazmat.primitives import hashes, serialization
 
 
@@ -33,14 +33,9 @@ class ProgramError(Exception):
 def initalise_database(database):
     cursor = database.cursor()
 
-    cursor.execute('CREATE TABLE certificates ('
-                   'certificate_hash TEXT PRIMARY KEY,'
-                   'serial_number TEXT NOT NULL UNIQUE,'
-                   'subject_name TEXT NOT NULL,'
-                   'certificate TEXT NOT NULL,'
-                   'roles TEXT NOT NULL,'
-                   'ttl INTEGER'
-                   ')')
+    cursor.execute('CREATE TABLE certificates (certificate_hash TEXT PRIMARY KEY, serial_number TEXT NOT NULL, '
+                   'subject_name TEXT NOT NULL, issuer_name TEXT NOT NULL, certificate TEXT NOT NULL, '
+                   'roles TEXT NOT NULL, ttl INTEGER)')
 
     database.commit()
 
@@ -69,9 +64,6 @@ def insert_certificate(database, certificate_file, roles, ttl):
     except ValueError:
         raise ProgramError(f'No certificate in file: {certificate_file}')
 
-    certificate_hash = certificate.fingerprint(hashes.SHA256())
-    certificate_hash = binascii.hexlify(certificate_hash).decode('utf-8')
-
     serial_number = serial_number = certificate.serial_number
     serial_number = serial_number.to_bytes((serial_number.bit_length() + 7) // 8, byteorder = 'big')
     serial_number = binascii.hexlify(serial_number).decode('utf-8')
@@ -81,16 +73,31 @@ def insert_certificate(database, certificate_file, roles, ttl):
     for attribute in certificate.subject:
         subject_name += (';' if len(subject_name) else '') + attribute.rfc4514_string()
 
+    issuer_name = ''
+
+    for attribute in certificate.issuer:
+        issuer_name += (';' if len(issuer_name) else '') + attribute.rfc4514_string()
+
+    certificate_hash = certificate.fingerprint(hashes.SHA256())
+    certificate_hash = binascii.hexlify(certificate_hash).decode('utf-8')
+
     roles = ','.join(sorted(roles, key = lambda role: role_names[role]))
     cursor = database.cursor()
 
-    cursor.execute('INSERT OR REPLACE INTO certificates (certificate_hash, serial_number, subject_name, certificate, roles, ttl)\n'
-                   'VALUES (?, ?, ?, ?, ?, ?)',
-                   (certificate_hash, serial_number, subject_name, certificate.public_bytes(serialization.Encoding.PEM), roles, ttl))
+    cursor.execute('INSERT INTO certificates (certificate_hash, serial_number, subject_name, issuer_name, certificate, roles, ttl) '
+                   'VALUES (?, ?, ?, ?, ?, ?, ?) '
+                   'ON CONFLICT (certificate_hash) DO UPDATE SET roles = excluded.roles, ttl = excluded.ttl',
+                   (certificate_hash,
+                    serial_number,
+                    subject_name,
+                    issuer_name,
+                    certificate.public_bytes(serialization.Encoding.PEM),
+                    roles,
+                    ttl))
 
     database.commit()
 
-    print(f'Inserted {subject_name}: {roles}')
+    print('Inserted', subject_name, 'with', roles)
 
 
 def delete_certificate(database, serial_number):
@@ -106,14 +113,12 @@ def delete_certificate(database, serial_number):
         print(f'No certificate with serial number: {serial_number}')
         return
 
-    (subject_name, roles) = row
-
     cursor.execute('DELETE FROM certificates WHERE serial_number = ?',
                    (serial_number,))
 
     database.commit()
 
-    print(f'Deleted {subject_name}: {roles}')
+    print('Deleted',  row['subject_name'], 'with', row['roles'])
 
 
 def export_certificate(database, serial_number):
@@ -128,16 +133,14 @@ def export_certificate(database, serial_number):
         print(f'No certificate with serial number: {serial_number}')
         return
 
-    (certificate,) = row
-
-    print(certificate.decode('utf-8'), end = '')
+    print(row['certificate'].decode('utf-8'), end = '')
 
 
 def list_certificates(database):
     cursor = database.cursor()
 
-    cursor.execute('SELECT certificate_hash, serial_number, subject_name, roles, ttl FROM certificates\n'
-                   'ORDER BY subject_name ASC')
+    cursor.execute('SELECT certificate_hash, serial_number, subject_name, issuer_name, roles, ttl '
+                   'FROM certificates ORDER BY subject_name ASC')
 
     rows = cursor.fetchall()
 
@@ -146,18 +149,17 @@ def list_certificates(database):
         return
 
     for row in rows:
-        (certificate_hash, serial_number, subject_name, roles, ttl) = row
+        print('Serial Number:   ', row['serial_number'])
+        print('Subject Name:    ', row['subject_name'])
+        print('Issuer Name:     ', row['issuer_name'])
 
-        print(f'Serial Number:    {serial_number}')
-        print(f'Subject Name:     {subject_name}')
+        for role in row['roles'].split(','):
+            print('Role:            ', role)
 
-        for role in roles.split(','):
-            print(f'Role:             {role}')
+        if row['ttl']:
+            print('TTL:             ', row['ttl'])
 
-        if ttl:
-            print(f'TTL:              {ttl}')
-
-        print(f'Certificate Hash: {certificate_hash}')
+        print('Certificate Hash:', row['certificate_hash'])
         print('')
 
 
@@ -202,7 +204,7 @@ def main():
                 except ValueError:
                     raise ProgramError(f'Invalid ttl: {ttl}')
 
-                if ttl < 0 or ttl > 2592000:
+                if ttl < 1 or ttl > 2592000:
                     raise ProgramError(f'TTL must be between 1 and 2592000')
 
             elif option in ('-s', '--sast'):
@@ -230,7 +232,7 @@ def main():
                 help = True
 
         if help:
-            print('Usage: ' + os.path.basename(sys.argv[0]) + ' [OPTIONS] [DATABASE-FILE]\n'
+            print('Usage: ' + os.path.basename(sys.argv[0]) + ' [OPTIONS] DATABASE-FILE\n'
                   'Manage the certificate database for TVS.\n'
                   '\n'
                   '  -l, --list                      list certificates\n'

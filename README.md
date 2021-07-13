@@ -7,9 +7,13 @@ Services and clients that do security services for phones
 * `tvsd` - Server that responds to TVS requests. 
 * `tvsctl` - Mange the certificate database used by `tvsd`.
 * `tvsc` - Client that can send TVS requests. 
+* `capfd` - Server that responds to CAPF requests.
+* `capfctl` - Manage the device database used by `capfd`
+* `capfc` - Client that can send CAPF requests.
 
-See [Trust Verification](http://usecallmanager.nz/trust-verification.html) for
-example usage.
+See [Trust Verification](http://usecallmanager.nz/trust-verification.html) and
+See [Certificate Enrollment](http://usecallmanager.nz/certificate-enrollment.html)
+for example usage.
 
 ## Requirements
 

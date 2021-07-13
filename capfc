@@ -1,0 +1,486 @@
+#!/usr/bin/python3
+#
+# Copyright (c) 2021 Gareth Palmer <gareth.palmer3@gmail.com>
+# This program is free software, distributed under the terms of
+# the GNU General Public License Version 2.
+
+import sys
+import os.path
+import re
+import getopt
+import traceback
+import socket
+import ssl
+import struct
+
+from cryptography import x509
+from cryptography.hazmat import backends
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+
+
+PROTOCOL_ID = 85
+PROTOCOL_VERSION = 3
+
+COMMAND_AUTH_REQUEST = 1
+COMMAND_AUTH_RESPONSE = 2
+COMMAND_KEY_GEN_REQUEST = 3
+COMMAND_KEY_GEN_RESPONSE = 4
+COMMAND_ENCRYPT_RESPONSE = 5
+COMMAND_ENCRYPT_REQUEST = 6
+COMMAND_DECRYPT_REQUEST = 7
+COMMAND_DECRYPT_RESPONSE = 8
+COMMAND_STORE_CERT_REQUEST = 9
+COMMAND_STORE_CERT_RESPONSE = 10
+COMMAND_FETCH_CERT_REQUEST = 11
+COMMAND_FETCH_CERT_RESPONSE = 12
+COMMAND_DELETE_CERT_REQUEST = 13
+COMMAND_DELETE_CERT_RESPONSE = 14
+COMMAND_END_SESSION = 15
+COMMAND_RETRY_LATER = 16
+COMMAND_REQUEST_IN_PROGRESS = 17
+COMMAND_STATUS_ENQUIRY = 18
+COMMAND_STATUS_RESPONSE = 19
+COMMAND_ABORT_REQUEST = 20
+COMMAND_ABORT_RESPONSE = 21
+COMMAND_SIGN_CERT_REQUEST = 22
+COMMAND_SIGN_CERT_RESPONSE = 23
+
+ELEMENT_REASON = 1
+ELEMENT_REASON_INFO = 2
+ELEMENT_CERTIFICATE_TYPE = 3
+ELEMENT_CERTIFICATE = 4
+ELEMENT_CERTIFICATE_ID = 5
+ELEMENT_SIGNED_DATA = 6
+ELEMENT_VERSION = 7
+ELEMENT_AUTH_TYPE = 8
+ELEMENT_PUBLIC_KEY = 9
+ELEMENT_KEY_SIZE = 10
+ELEMENT_AUTH_PASSWORD = 11
+ELEMENT_RETRY_DELAY = 12
+ELEMENT_DEVICE_NAME = 13
+ELEMENT_SUDI_DATA = 16
+ELEMENT_KEY_TYPE = 17
+ELEMENT_EC_CURVE = 18
+ELEMENT_DIGEST_TYPE = 19
+ELEMENT_SIGNED_DATA_SHA2 = 20
+
+REASON_NONE = 1
+REASON_OPERATION = 7
+
+AUTH_TYPE_NONE = 0
+AUTH_TYPE_PASSWORD = 1
+
+CERTIFICATE_TYPE_LSC = 1
+CERTIFICATE_TYPE_MIC = 2
+
+KEY_TYPE_RSA = 0
+KEY_TYPE_EC = 1
+
+EC_CURVE_SECP256K1 = 0
+EC_CURVE_SECP384P1 = 1
+EC_CURVE_SECP521R1 = 2
+
+
+class ProgramError(Exception):
+    pass
+
+
+def send_response(server_socket, command, session_id, elements):
+    response = bytearray()
+    response += struct.pack('> B B I H', PROTOCOL_ID, command, session_id, 0)
+
+    for tag, value in elements.items():
+        if tag == ELEMENT_REASON:
+            reason = value
+            response += struct.pack('> B H B', ELEMENT_REASON, 1, reason)
+
+        elif tag == ELEMENT_CERTIFICATE_TYPE:
+            certificate_type = value
+            response += struct.pack('> B H B', ELEMENT_CERTIFICATE_TYPE, 1, certificate_type)
+
+        elif tag == ELEMENT_CERTIFICATE:
+            certificate = value
+            certificate = struct.pack('> B H B B', 1, len(certificate) + 2, 0, CERTIFICATE_TYPE_LSC) + certificate
+
+            response += struct.pack('> B H', ELEMENT_CERTIFICATE, len(certificate))
+            response += certificate
+
+        elif tag == ELEMENT_VERSION:
+            version = value
+            response += struct.pack('> B H B', ELEMENT_VERSION, 1, version)
+
+        elif tag == ELEMENT_AUTH_PASSWORD:
+            password = value
+            password = password.encode('utf-8') + b'\x00'
+
+            response += struct.pack('> B H', ELEMENT_AUTH_PASSWORD, len(password))
+            response += password
+
+        elif tag == ELEMENT_DEVICE_NAME:
+            device_name = value
+            device_name = device_name.encode('utf-8') + b'\x00'
+
+            response += struct.pack('> B H', ELEMENT_DEVICE_NAME, len(device_name))
+            response += device_name
+
+        elif tag == ELEMENT_PUBLIC_KEY:
+            public_key = value
+
+            response += struct.pack('> B H', ELEMENT_PUBLIC_KEY, len(public_key))
+            response += public_key
+
+        else:
+            raise ProgramError(f'Unknown ELEMENT tag: {tag}')
+
+    struct.pack_into('> H', response, 6, len(response) - 8)
+    server_socket.send(response)
+
+
+def receive_request(server_socket):
+    request = server_socket.recv(8)
+
+    if not len(request):
+        raise ProgramError('Server closed socket')
+
+    if len(request) != 8:
+        raise ProgramError('Invalid header length')
+
+    (protocol_id, command, session_id, length) = struct.unpack('> B B I H', request)
+
+    if protocol_id != PROTOCOL_ID:
+        raise ProgramError(f'Invalid protocol ID: {protocol_id}')
+
+    while len(request) < (length + 8):
+        request += server_socket.recv((length + 8) - len(request))
+
+    elements = {}
+    index = 8
+
+    while index < len(request):
+        (tag, length) = struct.unpack_from('> B H', request, index)
+        index += 3
+
+        if tag == ELEMENT_REASON:
+            reason = request[index]
+            elements[ELEMENT_REASON] = reason
+
+        elif tag == ELEMENT_REASON_INFO:
+            reason_info = request[index:index + length]
+            reason_info = reason_info[:1].decode('utf-8')
+
+            elements[ELEMENT_REASON_INFO] = reason_info
+
+        elif tag == ELEMENT_CERTIFICATE_TYPE:
+            certificate_type = request[index]
+            elements[ELEMENT_CERTIFICATE_TYPE] = certificate_type
+
+        elif tag == ELEMENT_CERTIFICATE:
+            certificate = request[index:index + length]
+            certificate = certificate[5:]
+
+            elements[ELEMENT_CERTIFICATE] = certificate
+
+        elif tag == ELEMENT_VERSION:
+            version = request[index]
+            elements[ELEMENT_VERSION] = version
+
+        elif tag == ELEMENT_AUTH_TYPE:
+            auth_type = request[index]
+            elements[ELEMENT_AUTH_TYPE] = auth_type
+
+        elif tag == ELEMENT_KEY_SIZE:
+            (key_size,) = struct.unpack_from('> H', request, index)
+            elements[ELEMENT_KEY_SIZE] = key_size
+
+        elif tag == ELEMENT_KEY_TYPE:
+            key_type = request[index]
+            elements[ELEMENT_KEY_TYPE] = key_type
+
+        else:
+            raise ProgramError(f'Unknown ELEMENT tag: {tag}')
+
+        index += length
+
+    return command, session_id, elements
+
+
+def create_socket(hostname, port, timeout, capf_certificate_file):
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+    try:
+        if os.path.isdir(capf_certificate_file):
+            ssl_context.load_verify_locations(cadir = capf_certificate_file)
+        else:
+            ssl_context.load_verify_locations(cafile = capf_certificate_file)
+
+    except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
+        raise ProgramError(f'Unable to load {capf_certificate_file}: {error.strerror}')
+
+    ssl_context.verify_mode = ssl.CERT_REQUIRED
+    ssl_context.check_hostname = False
+
+    try:
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.settimeout(timeout)
+
+        server_socket = ssl_context.wrap_socket(server_socket)
+        server_socket.connect((hostname, port))
+
+    except ssl.SSLError as error:
+        raise ProgramError(error.reason)
+
+    except OSError as error:
+        raise ProgramError(error.strerror)
+
+    return server_socket
+
+
+def next_operation(server_socket, device_name, password, certificate_file):
+    command, session_id, elements = receive_request(server_socket)
+
+    if command != COMMAND_AUTH_REQUEST:
+        raise ProgramError(f'Command is not COMMAND_AUTH_REQUEST: {command}')
+
+    version = elements.get(ELEMENT_VERSION, None)
+
+    if version != PROTOCOL_VERSION:
+        raise ProgramError(f'Invalid PROTOCOL_VERSION: {version}')
+
+    elements = {
+        ELEMENT_REASON: REASON_NONE,
+        ELEMENT_VERSION: PROTOCOL_VERSION,
+        ELEMENT_DEVICE_NAME: device_name
+    }
+
+    if password is not None:
+        elements[ELEMENT_AUTH_PASSWORD] = password
+
+    send_response(server_socket, COMMAND_AUTH_RESPONSE, session_id, elements)
+    command, session_id, elements = receive_request(server_socket)
+
+    if command == COMMAND_KEY_GEN_REQUEST:
+        key_size = elements.get(ELEMENT_KEY_SIZE, None)
+
+        if key_size not in (1024, 2048, 4096):
+            raise ProgramError(f'Invalid ELEMENT_KEY_SIZE: {key_size}')
+
+        key_type = elements.get(ELEMENT_KEY_TYPE, None)
+
+        if key_type != KEY_TYPE_RSA:
+            raise ProgramError(f'Invalid ELEMENT_KEY_TYPE: {key_type}')
+
+        generate_key(server_socket, session_id, key_size, certificate_file)
+
+    elif command == COMMAND_FETCH_CERT_REQUEST:
+        store_certificate(server_socket, session_id, certificate_file)
+
+    elif command == COMMAND_DELETE_CERT_REQUEST:
+        delete_certificate(server_socket, session_id, certificate_file)
+
+    elif command == COMMAND_END_SESSION:
+        reason = elements.get(ELEMENT_REASON, None)
+
+        if reason == REASON_OPERATION:
+            print(f'No scheduled operation')
+        else:
+            print(f'Server ended session: {reason}')
+
+    else:
+        print(f'Unexpected COMMAND: {command}')
+
+
+def generate_key(server_socket, session_id, key_size, certificate_file):
+    send_response(server_socket, COMMAND_REQUEST_IN_PROGRESS, session_id, {})
+
+    private_key = rsa.generate_private_key(65537, key_size, backends.default_backend())
+    public_key = private_key.public_key()
+
+    send_response(server_socket, COMMAND_KEY_GEN_RESPONSE, session_id, {
+        ELEMENT_PUBLIC_KEY: public_key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    })
+
+    command, session_id, elements = receive_request(server_socket)
+
+    if command != COMMAND_STORE_CERT_REQUEST:
+        print(f'Unexpected COMMAND: {command}')
+        return
+
+    certificate = elements.get(ELEMENT_CERTIFICATE, None)
+
+    if certificate is None:
+        raise ProgramError(f'Missing ELEMENT_CERTIFICATE')
+
+    try:
+        certificate = x509.load_der_x509_certificate(certificate, backends.default_backend())
+    except ValueError:
+        raise ProgramError('Invalid certificate')
+
+    with open(certificate_file, 'wb') as file:
+        file.write(certificate.public_bytes(serialization.Encoding.PEM))
+        file.write(private_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+
+    print(f'Wrote {certificate_file}')
+
+    send_response(server_socket, COMMAND_STORE_CERT_RESPONSE, session_id, {
+        ELEMENT_REASON: REASON_NONE
+    })
+
+    command, session_id, elements = receive_request(server_socket)
+
+    if command != COMMAND_END_SESSION:
+        print(f'Unexpected COMMAND: {command}')
+
+
+def store_certificate(server_socket, session_id, certificate_file):
+    try:
+        with open(certificate_file, 'rb') as file:
+            certificate = file.read()
+
+    except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
+        raise ProgramError(error)
+
+    try:
+        certificate = x509.load_pem_x509_certificate(certificate, backends.default_backend())
+    except ValueError:
+        raise ProgramError(error)
+
+    send_response(server_socket, COMMAND_FETCH_CERT_RESPONSE, session_id, {
+        ELEMENT_CERTIFICATE: certificate.public_bytes(serialization.Encoding.DER)
+    })
+
+    print(f'Stored {certificate_file}')
+
+    command, session_id, elements = receive_request(server_socket)
+
+    if command != COMMAND_END_SESSION:
+        print(f'Unexpected COMMAND: {command}')
+
+
+def delete_certificate(server_socket, session_id, certificate_file):
+    if not os.path.exists(certificate_file):
+        raise ProgramError('Certificate {certificate_file} does not exist')
+
+    os.unlink(certificate_file)
+
+    send_response(server_socket, COMMAND_DELETE_CERT_RESPONSE, session_id, {
+        ELEMENT_REASON: REASON_NONE
+    })
+
+    print(f'Deleted {certificate_file}')
+
+    command, session_id, elements = receive_request(server_socket)
+
+    if command != COMMAND_END_SESSION:
+        print(f'Unexpected COMMAND: {command}')
+
+
+def main():
+    try:
+        short_options = 'h:t:A:p:c:H'
+        long_options = ['host=', 'timeout=', 'capf=', 'password=', 'certificate=', 'help']
+
+        try:
+            options, arguments = getopt.gnu_getopt(sys.argv[1:], short_options, long_options)
+        except getopt.GetoptError as error:
+            raise ProgramError(error.msg[0].upper() + error.msg[1:])
+
+        hostname = None
+        port = 3804
+        timeout = 10
+        capf_certificate_file = None
+        certificate_file = None
+        password = None
+        help = False
+
+        for option, argument in options:
+            if option in ('-h', '--host'):
+                hostname = argument
+
+                if ':' in hostname:
+                    hostname, port = hostname.rsplit(':', maxsplit = 1)
+
+                    try:
+                        port = int(port)
+
+                        if port < 1 or port > 65535:
+                            raise ValueError
+
+                    except ValueError:
+                        raise ProgramError(f'Invalid port: {port}')
+
+                if not re.search(r'(?xi) ^ (?: [a-z0-9\-]+ \.)* [a-z0-9\-]+ $', hostname):
+                    raise ProgramError(f'Invalid host: {hostname}')
+
+            elif option in ('-t', '--timeout'):
+                timeout = argument
+
+                try:
+                    timeout = int(timeout)
+                except ValueError:
+                    raise ProgramError(f'Invalid timeout: {timeout}')
+
+            elif option in ('-A', '--capf'):
+                capf_certificate_file = argument
+
+            elif option in ('-p', '--password'):
+                password = argument
+
+                if not re.search('(?x) [0-9]{4,16} $', password):
+                    raise ProgramError(f'Invalid password: {password}')
+
+            elif option in ('-c', '--certificate'):
+                certificate_file = argument
+
+            elif option in ('-H', '--help'):
+                help = True
+
+        if help:
+            print('Usage: ' + os.path.basename(sys.argv[0]) + ' [OPTIONS] DEVICE-NAME\n'
+                  'Get a certificate from a CAPF server.\n'
+                  '\n'
+                  '  -h, --host HOST[:PORT]             host name or IP address and port of the CAPF server\n'
+                  '  -t, --timeout TIMEOUT              connection timeout in seconds (default 10)\n'
+                  '  -p, --password PASSWORD            authentication password, 4 to 16 characters\n'
+                  '  -A, --capf CAPF-CERT-FILE          CAPF server certificate\n'
+                  '  -c, --certificate PEM-FILE         input or output file for generated certificate (default DEVICE-NAME.pem)\n'
+                  '  -H, --help                         print this help and exit\n'
+                  '\n'
+                  'DEVICE-NAME is in SEPMAC format, eg: SEP58971ECC97C1.\n'
+                  'Default PORT for CAPF server is 3804.')
+
+            return
+
+        if not len(arguments):
+            raise ProgramError('No device name specified')
+
+        device_name = arguments[0]
+
+        if not re.search('(?x) ^ SEP [0-9A-F]{12} $', device_name):
+            raise ProgramError(f'Invalid device name: {device_name}')
+
+        if certificate_file is None:
+            certificate_file = device_name + '.pem'
+
+        if hostname is None:
+            raise ProgramError('No host specified')
+
+        if capf_certificate_file is None:
+            raise ProgramError('No CAPF certificate specified')
+
+        with create_socket(hostname, port, timeout, capf_certificate_file) as server_socket:
+            next_operation(server_socket, device_name, password, certificate_file)
+
+    except ProgramError as error:
+        print(str(error), file = sys.stderr)
+        exit(1)
+
+    except Exception:
+        traceback.print_exc(file = sys.stderr)
+        exit(1)
+
+    exit(0)
+
+
+if __name__ == '__main__':
+    main()

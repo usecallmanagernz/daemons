@@ -1,0 +1,228 @@
+#!/usr/bin/python3
+#
+# Copyright (c) 2021 Gareth Palmer <gareth.palmer3@gmail.com>
+# This program is free software, distributed under the terms of
+# the GNU General Public License Version 2.
+
+import sys
+import os.path
+import re
+import getopt
+import traceback
+import sqlite3
+
+
+class ProgramError(Exception):
+    pass
+
+
+def initalise_database(database):
+    cursor = database.cursor()
+
+    cursor.execute('CREATE TABLE devices (device_name TEXT PRIMARY KEY, operation TEXT NOT NULL, key_size INTEGER, '
+                   'password TEXT, certificate TEXT, serial_number TEXT, not_valid_before TEXT, not_valid_after TEXT)')
+
+    database.commit()
+
+
+def set_device_operation(database, device_name, operation, key_size, password):
+    cursor = database.cursor()
+
+    cursor.execute('INSERT INTO devices (device_name, operation, key_size, password) '
+                   'VALUES (?, ?, ?, ?) ON CONFLICT (device_name) '
+                   'DO UPDATE SET operation = excluded.operation, key_size = excluded.key_size, password = excluded.password',
+                   (device_name, operation, key_size, password))
+
+    database.commit()
+
+    print('Set', device_name, 'to', operation)
+
+
+def delete_device(database, device_name):
+    cursor = database.cursor()
+
+    cursor.execute('SELECT true FROM devices WHERE device_name = ?',
+                   (device_name,))
+
+    row = cursor.fetchone()
+
+    if row is None:
+        print('Device', device_name, 'does not exist')
+        return
+
+    cursor.execute('DELETE FROM devices WHERE device_name = ?',
+                   (device_name,))
+
+    print('Deleted', device_name)
+
+
+def export_certificate(database, device_name):
+    cursor = database.cursor()
+
+    cursor.execute('SELECT certificate FROM devices WHERE device_name = ?',
+                   (device_name,))
+
+    row = cursor.fetchone()
+
+    if row is None:
+        print('Device', device_name, 'does not exist')
+        return
+
+    if row['certificate'] is None:
+        print('Device', device_name, 'does not have a certificate')
+        return
+
+    print(row['certificate'].decode('utf-8'), end = '')
+
+
+def list_devices(database):
+    cursor = database.cursor()
+
+    cursor.execute('SELECT device_name, operation, key_size, password, certificate, serial_number, not_valid_before, not_valid_after '
+                   'FROM devices ORDER BY device_name ASC')
+
+    rows = cursor.fetchall()
+
+    if not len(rows):
+        print('No devices in database')
+        return
+
+    for row in rows:
+        print('Device Name:      ', row['device_name'])
+        print('Operation:        ', row['operation'])
+
+        if row['key_size']:
+            print('Key Size:         ', row['key_size'])
+
+        if row['password']:
+            print(f'Password:        ', row['password'])
+
+        if row['certificate'] is not None:
+            print('Serial Number:    ', row['serial_number'])
+            print('Certificate:      ', len(row['certificate']), 'bytes')
+            print('Not Valid Before: ', row['not_valid_before'])
+            print('Not Valid After   ', row['not_valid_after'])
+
+        print('')
+
+
+def main():
+    try:
+        short_options = 's:o:S:p:d:e:lH'
+        long_options = ['set=', 'operation=', 'keysize=', 'password=', 'delete=', 'export=', 'list', 'help']
+
+        try:
+            options, arguments = getopt.gnu_getopt(sys.argv[1:], short_options, long_options)
+        except getopt.GetoptError as error:
+            raise ProgramError(error.msg[0].upper() + error.msg[1:])
+
+        mode = None
+        device_name = None
+        operation = None
+        key_size = 2048
+        password = None
+        help = False
+
+        for option, argument in options:
+            if option in ('-s', '--set'):
+                mode = 'set'
+                device_name = argument
+
+            elif option in ('-o', '--operation'):
+                operation = argument
+
+                if not re.search('(?xi) ^ (?: install | fetch | delete | none) $', operation):
+                    raise ProgramError(f'Invalid operation: {operation}')
+
+                operation = operation.upper()
+
+            elif option in ('-S', '--keysize'):
+                key_size = argument
+
+                try:
+                    key_size = int(key_size)
+
+                    if key_size not in (1024, 2048, 4096):
+                        raise ValueError
+
+                except ValueError:
+                    raise ProgramError(f'Invalid key size: {key_size}')
+
+            elif option in ('-p', '--password'):
+                password = argument
+
+                if len(password) < 4 or len(password) > 15:
+                    raise ProgramError('Invalid password length')
+
+            elif option in ('-d', '--delete'):
+                mode = 'delete'
+                device_name = argument
+
+            elif option in ('-e', '--export'):
+                mode = 'export'
+                device_name = argument
+
+            if option in ('-l', '--list'):
+                mode = 'list'
+
+            elif option in ('-H', '--help'):
+                help = True
+
+        if help:
+            print('Usage: ' + os.path.basename(sys.argv[0]) + ' [OPTIONS] DATABASE-FILE\n'
+                  'Manage the certificate database for CAPF.\n'
+                  '\n'
+                  '  -l, --list                      list devices\n'
+                  '  -s, --set DEVICE-NAME           set the current operation mode for device\n'
+                  '  -o, --operation OPERATION       install, fetch, delete or none\n'
+                  '  -S, --keysize BITS              key size, 1024, 2048 or 4096 (default 2048)\n'
+                  '  -p, --password PASSWORD         authentication password\n'
+                  '  -d, --delete DEVICE-NAME        delete device from database\n'
+                  '  -e, --export DEVICE-NAME        export device certificate from database\n'
+                  '  -H, --help                      print this help and exit\n'
+                  '\n'
+                  'DATABASE-FILE will be automatically created if it does not exist.\n'
+                  'Setting a device that already exists will overwrite that entry.\n')
+
+            return
+
+        if mode is None:
+            raise ProgramError('No mode specified (set, delete, export or list). Try --help')
+
+        database_file = arguments[0]
+
+        with sqlite3.connect(database_file) as database:
+            # Empty database
+            if not os.path.getsize(database_file):
+                initalise_database(database)
+
+            database.row_factory = sqlite3.Row
+
+            if mode == 'set':
+                if operation is None:
+                    raise ProgramError('No operation specified')
+
+                set_device_operation(database, device_name, operation, key_size, password)
+
+            elif mode == 'delete':
+                delete_device(database, device_name)
+
+            elif mode == 'export':
+                export_certificate(database, device_name)
+
+            elif mode == 'list':
+                list_devices(database)
+
+    except ProgramError as error:
+        print(str(error), file = sys.stderr)
+        exit(1)
+
+    except Exception:
+        traceback.print_exc(file = sys.stderr)
+        exit(1)
+
+    exit(0)
+
+
+if __name__ == '__main__':
+    main()
