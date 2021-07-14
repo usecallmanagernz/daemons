@@ -73,6 +73,7 @@ ELEMENT_SIGNED_DATA_SHA2 = 20
 
 REASON_NONE = 1
 REASON_OPERATION = 7
+REASON_DEVICE = 9
 
 AUTH_TYPE_NONE = 0
 AUTH_TYPE_PASSWORD = 1
@@ -431,7 +432,7 @@ def handle_client(client_socket):
                 logging.info('Unknown device: %s', device_name)
 
                 send_request(client_socket, COMMAND_END_SESSION, session_id, {
-                    ELEMENT_REASON: REASON_OPERATION
+                    ELEMENT_REASON: REASON_DEVICE
                 })
 
             elif row['password'] is not None and row['password'] != password:
@@ -597,7 +598,7 @@ def main():
             print('Usage: ' + os.path.basename(sys.argv[0]) + ' [OPTIONS] DATABASE-FILE\n'
                   'Issue X509 certficates to phones.\n'
                   '\n'
-                  '  -A, --capf CAPF-CERT-FILE        CAPF server certificate\n'
+                  '  -A, --capf CAPF-CERT-FILE        CAPF certificate\n'
                   '  -i, --issuer ISSUER-CERT-FILE    issuing (CA) certificate that will used for signing\n'
                   '  -p, --port PORT                  port CAPF server is listening on (default 3804)\n'
                   '  -t, --timeout TIMEOUT            connection timeout in seconds (default 10)\n'

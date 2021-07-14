@@ -67,6 +67,7 @@ ELEMENT_SIGNED_DATA_SHA2 = 20
 
 REASON_NONE = 1
 REASON_OPERATION = 7
+REASON_DEVICE = 9
 
 AUTH_TYPE_NONE = 0
 AUTH_TYPE_PASSWORD = 1
@@ -283,6 +284,8 @@ def next_operation(server_socket, device_name, password, certificate_file):
 
         if reason == REASON_OPERATION:
             print(f'No scheduled operation')
+        elif reason == REASON_DEVICE:
+            print(f'Unknown device {device_name}')
         else:
             print(f'Server ended session: {reason}')
 
@@ -439,11 +442,11 @@ def main():
             print('Usage: ' + os.path.basename(sys.argv[0]) + ' [OPTIONS] DEVICE-NAME\n'
                   'Get a certificate from a CAPF server.\n'
                   '\n'
+                  '  -A, --capf CAPF-CERT-FILE          CAPF certificate file or directory\n'
                   '  -h, --host HOST[:PORT]             host name or IP address and port of the CAPF server\n'
                   '  -t, --timeout TIMEOUT              connection timeout in seconds (default 10)\n'
+                  '  -c, --certificate CERT-FILE        phone certificate (default DEVICE-NAME.pem)\n'
                   '  -p, --password PASSWORD            authentication password, 4 to 16 characters\n'
-                  '  -A, --capf CAPF-CERT-FILE          CAPF server certificate\n'
-                  '  -c, --certificate PEM-FILE         input or output file for generated certificate (default DEVICE-NAME.pem)\n'
                   '  -H, --help                         print this help and exit\n'
                   '\n'
                   'DEVICE-NAME is in SEPMAC format, eg: SEP58971ECC97C1.\n'

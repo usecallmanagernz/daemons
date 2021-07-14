@@ -5,17 +5,25 @@ on:
     branches:
       - master
     paths:
-      - tvsc 
-      - tvsd
-      - tlsctl
+      - 'tvsc'
+      - 'tvsd'
+      - 'tlsctl'
+      - 'capfc'
+      - 'capfd'
+      - 'capfctl'
+      - '.github/workflows/pylint.yml'
 
   pull_request:
     branches:
       - master
     paths:
-      - tvsc
-      - tvsd
-      - tlsctl
+      - 'tvsc'
+      - 'tvsd'
+      - 'tlsctl'
+      - 'capfc'
+      - 'capfd'
+      - 'capfctl'
+      - '.github/workflows/pylint.yml'
 
 jobs:
   lint:
