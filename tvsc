@@ -319,7 +319,7 @@ def main():
             return
 
         if not len(arguments):
-            raise ProgramError('No certificate .pem file specified')
+            raise ProgramError('No certificate file specified')
 
         certificate_file = arguments[0]
 
@@ -327,7 +327,7 @@ def main():
             raise ProgramError('No host specified')
 
         if tvs_certificate_file is None:
-            raise ProgramError('No TVS certificate .pem file specified')
+            raise ProgramError('No TVS certificate file specified')
 
         with create_socket(hostname, port, timeout, tvs_certificate_file) as server_socket:
             verify_certificate(server_socket, certificate_file, device_name)

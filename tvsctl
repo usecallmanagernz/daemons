@@ -33,9 +33,9 @@ class ProgramError(Exception):
 def initalise_database(database):
     cursor = database.cursor()
 
-    cursor.execute('CREATE TABLE certificates (certificate_hash TEXT PRIMARY KEY, serial_number TEXT NOT NULL, '
-                   'subject_name TEXT NOT NULL, issuer_name TEXT NOT NULL, certificate TEXT NOT NULL, '
-                   'roles TEXT NOT NULL, ttl INTEGER)')
+    cursor.execute('CREATE TABLE certificates (id INTEGER PRIMARY KEY, certificate_hash TEXT UNIQUE NOT NULL, '
+                   'serial_number TEXT NOT NULL, subject_name TEXT NOT NULL, issuer_name TEXT NOT NULL, '
+                   'certificate TEXT NOT NULL, roles TEXT NOT NULL, ttl INTEGER)')
 
     database.commit()
 
@@ -100,37 +100,37 @@ def insert_certificate(database, certificate_file, roles, ttl):
     print('Inserted', subject_name, 'with', roles)
 
 
-def delete_certificate(database, serial_number):
+def delete_certificate(database, id):
     cursor = database.cursor()
 
     # RETURNING clause only available in sqlite >= 3.35
-    cursor.execute('SELECT subject_name, roles FROM certificates WHERE serial_number = ?',
-                   (serial_number,))
+    cursor.execute('SELECT subject_name, roles FROM certificates WHERE id = ?',
+                   (id,))
 
     row = cursor.fetchone()
 
     if row is None:
-        print(f'No certificate with serial number: {serial_number}')
+        print(f'No certificate with ID: {id}')
         return
 
-    cursor.execute('DELETE FROM certificates WHERE serial_number = ?',
-                   (serial_number,))
+    cursor.execute('DELETE FROM certificates WHERE id = ?',
+                   (id,))
 
     database.commit()
 
     print('Deleted',  row['subject_name'], 'with', row['roles'])
 
 
-def export_certificate(database, serial_number):
+def export_certificate(database, id):
     cursor = database.cursor()
 
-    cursor.execute('SELECT certificate FROM certificates WHERE serial_number = ?',
-                   (serial_number,))
+    cursor.execute('SELECT certificate FROM certificates WHERE id = ?',
+                   (id,))
 
     row = cursor.fetchone()
 
     if row is None:
-        print(f'No certificate with serial number: {serial_number}')
+        print(f'No certificate with ID: {id}')
         return
 
     print(row['certificate'].decode('utf-8'), end = '')
@@ -139,8 +139,8 @@ def export_certificate(database, serial_number):
 def list_certificates(database):
     cursor = database.cursor()
 
-    cursor.execute('SELECT certificate_hash, serial_number, subject_name, issuer_name, roles, ttl '
-                   'FROM certificates ORDER BY subject_name ASC')
+    cursor.execute('SELECT id, certificate_hash, serial_number, subject_name, issuer_name, roles, ttl '
+                   'FROM certificates ORDER BY id ASC')
 
     rows = cursor.fetchall()
 
@@ -149,6 +149,7 @@ def list_certificates(database):
         return
 
     for row in rows:
+        print('ID:              ', row['id'])
         print('Serial Number:   ', row['serial_number'])
         print('Subject Name:    ', row['subject_name'])
         print('Issuer Name:     ', row['issuer_name'])
@@ -187,11 +188,21 @@ def main():
 
             elif option in ('-d', '--delete'):
                 mode = 'delete'
-                serial_number = argument
+                id = argument
+
+                try:
+                    id = int(id)
+                except ValueError:
+                    raise ProgramError(f'Invalid ID: {id}')
 
             elif option in ('-e', '--export'):
                 mode = 'export'
-                serial_number = argument
+                id = argument
+
+                try:
+                    id = int(id)
+                except ValueError:
+                    raise ProgramError(f'Invalid ID: {id}')
 
             elif option in ('-l', '--list'):
                 mode = 'list'
@@ -235,7 +246,6 @@ def main():
             print('Usage: ' + os.path.basename(sys.argv[0]) + ' [OPTIONS] DATABASE-FILE\n'
                   'Manage the certificate database for TVS.\n'
                   '\n'
-                  '  -l, --list                      list certificates\n'
                   '  -i, --insert CERT-FILE          insert/replace certificate and roles into database\n'
                   '  -s, --sast                      insert certificate with the SAST role\n'
                   '  -c, --ccm                       insert certificate with CCM role\n'
@@ -245,8 +255,9 @@ def main():
                   '  -a, --app-server                insert certificate with APP-SERVER role\n'
                   '  -T, --tvs                       insert certificate with TVS role\n'
                   '  -L, --ttl LIFETIME              response validity lifetime\n'
-                  '  -d, --delete SERIAL-NUMBER      delete certificate from database\n'
-                  '  -e, --export SERIAL-NUMBER      export certificate from database\n'
+                  '  -l, --list                      list certificates\n'
+                  '  -d, --delete ID                 delete certificate from database\n'
+                  '  -e, --export ID                 export certificate from database\n'
                   '  -H, --help                      print this help and exit\n'
                   '\n'
                   'DATABASE-FILE will be automatically created if it does not exist.\n'
@@ -276,10 +287,10 @@ def main():
                 insert_certificate(database, certificate_file, roles, ttl)
 
             elif mode == 'delete':
-                delete_certificate(database, serial_number)
+                delete_certificate(database, id)
 
             elif mode == 'export':
-                export_certificate(database, serial_number)
+                export_certificate(database, id)
 
             elif mode == 'list':
                 list_certificates(database)

@@ -317,17 +317,22 @@ def generate_key(server_socket, session_id, key_size, certificate_file):
     try:
         certificate = x509.load_der_x509_certificate(certificate, backends.default_backend())
     except ValueError:
-        raise ProgramError('Invalid certificate')
+        print(f'Invalid certificate')
 
-    with open(certificate_file, 'wb') as file:
-        file.write(certificate.public_bytes(serialization.Encoding.PEM))
-        file.write(private_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+        send_response(server_socket, COMMAND_STORE_CERT_RESPONSE, session_id, {
+            ELEMENT_REASON: REASON_DEVICE
+        })
 
-    print(f'Wrote {certificate_file}')
+    else:
+        with open(certificate_file, 'wb') as file:
+            file.write(certificate.public_bytes(serialization.Encoding.PEM))
+            file.write(private_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
 
-    send_response(server_socket, COMMAND_STORE_CERT_RESPONSE, session_id, {
-        ELEMENT_REASON: REASON_NONE
-    })
+        print(f'Wrote {certificate_file}')
+
+        send_response(server_socket, COMMAND_STORE_CERT_RESPONSE, session_id, {
+            ELEMENT_REASON: REASON_NONE
+        })
 
     command, session_id, elements = receive_request(server_socket)
 
@@ -336,23 +341,31 @@ def generate_key(server_socket, session_id, key_size, certificate_file):
 
 
 def store_certificate(server_socket, session_id, certificate_file):
-    try:
-        with open(certificate_file, 'rb') as file:
-            certificate = file.read()
+    if os.path.exists(certificate_file):
+        try:
+            with open(certificate_file, 'rb') as file:
+                certificate = file.read()
 
-    except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
-        raise ProgramError(error)
+        except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
+            raise ProgramError(f'{error.strerror}: {error.filename}')
 
-    try:
-        certificate = x509.load_pem_x509_certificate(certificate, backends.default_backend())
-    except ValueError:
-        raise ProgramError(error)
+        try:
+            certificate = x509.load_pem_x509_certificate(certificate, backends.default_backend())
+        except ValueError:
+            raise ProgramError('Invalid certificate')
 
-    send_response(server_socket, COMMAND_FETCH_CERT_RESPONSE, session_id, {
-        ELEMENT_CERTIFICATE: certificate.public_bytes(serialization.Encoding.DER)
-    })
+        send_response(server_socket, COMMAND_FETCH_CERT_RESPONSE, session_id, {
+            ELEMENT_CERTIFICATE: certificate.public_bytes(serialization.Encoding.DER)
+        })
 
-    print(f'Stored {certificate_file}')
+        print(f'Stored {certificate_file}')
+
+    else:
+        send_response(server_socket, COMMAND_FETCH_CERT_RESPONSE, session_id, {
+            ELEMENT_REASON: REASON_DEVICE
+        })
+
+        print(f'{certificate_file} does not exist')
 
     command, session_id, elements = receive_request(server_socket)
 
@@ -361,16 +374,21 @@ def store_certificate(server_socket, session_id, certificate_file):
 
 
 def delete_certificate(server_socket, session_id, certificate_file):
-    if not os.path.exists(certificate_file):
-        raise ProgramError('Certificate {certificate_file} does not exist')
+    if os.path.exists(certificate_file):
+        os.unlink(certificate_file)
 
-    os.unlink(certificate_file)
+        send_response(server_socket, COMMAND_DELETE_CERT_RESPONSE, session_id, {
+            ELEMENT_REASON: REASON_NONE
+        })
 
-    send_response(server_socket, COMMAND_DELETE_CERT_RESPONSE, session_id, {
-        ELEMENT_REASON: REASON_NONE
-    })
+        print(f'Deleted {certificate_file}')
 
-    print(f'Deleted {certificate_file}')
+    else:
+        send_response(server_socket, COMMAND_DELETE_CERT_RESPONSE, session_id, {
+            ELEMENT_REASON: REASON_DEVICE
+        })
+
+        print(f'{certificate_file} does not exist')
 
     command, session_id, elements = receive_request(server_socket)
 

@@ -5,6 +5,7 @@
 # the GNU General Public License Version 2.
 
 import sys
+import os
 import os.path
 import socket
 import select
@@ -92,6 +93,7 @@ EC_CURVE_SECP521R1 = 2
 database_file = None
 issuer_certificate = None
 issuer_private_key = None
+certificates_dir = None
 validity_days = 365
 server_session_id = 0
 
@@ -250,14 +252,26 @@ def install_certificate(client_socket, session_id, device_name, key_size, databa
     public_key = elements.get(ELEMENT_PUBLIC_KEY, None)
 
     if public_key is None:
-        raise ProgramError('Missing ELEMENT_PUBLIC_KEY')
+        reason = elements.get(ELEMENT_REASON, None)
+
+        logging.info('Error: Key generation failed %d', reason)
+
+        send_request(client_socket, COMMAND_END_SESSION, session_id, {
+            ELEMENT_REASON: REASON_OPERATION
+        })
+
+        return
 
     global issuer_certificate, issuer_private_key, validity_days
 
     builder = x509.CertificateBuilder()
 
     subject_name = [x509.NameAttribute(oid.NameOID.COMMON_NAME, device_name)]
-    subject_name.extend(issuer_certificate.subject.get_attributes_for_oid(oid.NameOID.ORGANIZATION_NAME))
+
+    for attribute in issuer_certificate.subject:
+        if attribute.oid in (oid.NameOID.ORGANIZATION_NAME, oid.NameOID.ORGANIZATIONAL_UNIT_NAME,
+                             oid.NameOID.LOCALITY_NAME, oid.NameOID.STATE_OR_PROVINCE_NAME, oid.NameOID.COUNTRY_NAME):
+            subject_name.append(attribute)
 
     builder = builder.subject_name(x509.Name(subject_name))
     builder = builder.issuer_name(issuer_certificate.issuer)
@@ -307,6 +321,11 @@ def install_certificate(client_socket, session_id, device_name, key_size, databa
 
     logging.info('Result: Installed certificate')
 
+    global certificates_dir
+
+    with open(f'{certificates_dir}/{device_name}.pem', 'wb') as file:
+        file.write(certificate.public_bytes(serialization.Encoding.PEM))
+
     send_request(client_socket, COMMAND_STORE_CERT_REQUEST, session_id, {
         ELEMENT_CERTIFICATE_TYPE: CERTIFICATE_TYPE_LSC,
         ELEMENT_CERTIFICATE: certificate.public_bytes(serialization.Encoding.DER)
@@ -316,6 +335,11 @@ def install_certificate(client_socket, session_id, device_name, key_size, databa
 
     if command != COMMAND_STORE_CERT_RESPONSE:
         raise ProgramError(f'Unexpected command: {command}')
+
+    reason = elements.get(ELEMENT_REASON, None)
+
+    if reason != REASON_NONE:
+        logging.info('Error: Failed to store certificate %d', reason)
 
     send_request(client_socket, COMMAND_END_SESSION, session_id, {
         ELEMENT_REASON: REASON_NONE
@@ -329,34 +353,44 @@ def fetch_certificate(client_socket, session_id, device_name, database):
     if command != COMMAND_FETCH_CERT_RESPONSE:
         raise ProgramError(f'Unexpected command: {command}')
 
-    certificate = elements.get(ELEMENT_CERTIFICATE, None)
+    reason = elements.get(ELEMENT_REASON, None)
 
-    if certificate is None:
-        raise ProgramError('Missing ELEMENT_CERTIFICATE')
+    if reason != REASON_NONE:
+        logging.info('Error: Fetch certificate failed %d', reason)
+    else:
+        certificate = elements.get(ELEMENT_CERTIFICATE, None)
 
-    try:
-        certificate = x509.load_der_x509_certificate(certificate, backends.default_backend())
-    except ValueError:
-        raise ProgramError('Invalid certificate')
+        if certificate is None:
+            raise ProgramError('Missing ELEMENT_CERTIFICATE')
 
-    serial_number = certificate.serial_number
-    not_valid_before = certificate.not_valid_before
-    not_valid_after = certificate.not_valid_after
+        try:
+            certificate = x509.load_der_x509_certificate(certificate, backends.default_backend())
+        except ValueError:
+            raise ProgramError('Invalid certificate')
 
-    cursor = database.cursor()
+        serial_number = certificate.serial_number
+        not_valid_before = certificate.not_valid_before
+        not_valid_after = certificate.not_valid_after
 
-    cursor.execute('UPDATE devices SET operation = ?, serial_number = ?, certificate = ?, not_valid_before = ?, not_valid_after = ? '
-                   'WHERE device_name = ?',
-                   ('NONE',
-                    binascii.hexlify(serial_number.to_bytes((serial_number.bit_length() + 7) // 8, byteorder = 'big')).decode('utf-8'),
-                    certificate.public_bytes(serialization.Encoding.PEM),
-                    not_valid_before.strftime('%Y-%m-%d %H:%M:%S'),
-                    not_valid_after.strftime('%Y-%m-%d %H:%M:%S'),
-                    device_name))
+        cursor = database.cursor()
 
-    database.commit()
+        cursor.execute('UPDATE devices SET operation = ?, serial_number = ?, certificate = ?, not_valid_before = ?, not_valid_after = ? '
+                       'WHERE device_name = ?',
+                       ('NONE',
+                        binascii.hexlify(serial_number.to_bytes((serial_number.bit_length() + 7) // 8, byteorder = 'big')).decode('utf-8'),
+                        certificate.public_bytes(serialization.Encoding.PEM),
+                        not_valid_before.strftime('%Y-%m-%d %H:%M:%S'),
+                        not_valid_after.strftime('%Y-%m-%d %H:%M:%S'),
+                        device_name))
 
-    logging.info('Result: Fetched certificate')
+        database.commit()
+
+        global certificates_dir
+
+        with open(f'{certificates_dir}/{device_name}.pem', 'wb') as file:
+            file.write(certificate.public_bytes(serialization.Encoding.PEM))
+
+            logging.info('Result: Fetched certificate')
 
     send_request(client_socket, COMMAND_END_SESSION, session_id, {
         ELEMENT_REASON: REASON_NONE
@@ -370,16 +404,26 @@ def delete_certificate(client_socket, session_id, device_name, database):
     if command != COMMAND_DELETE_CERT_RESPONSE:
         raise ProgramError(f'Unexpected command: {command}')
 
-    cursor = database.cursor()
+    reason = elements.get(ELEMENT_REASON, None)
 
-    cursor.execute('UPDATE devices SET operation = ?, serial_number = NULL, certificate = NULL, not_valid_before = NULL, not_valid_after = NULL '
-                   'WHERE device_name = ?',
-                   ('NONE',
-                    device_name))
+    if reason != REASON_NONE:
+        logging.info('Error: Deleted certificate failed {reason}')
+    else:
+        cursor = database.cursor()
 
-    database.commit()
+        cursor.execute('UPDATE devices SET operation = ?, serial_number = NULL, certificate = NULL, not_valid_before = NULL, not_valid_after = NULL '
+                       'WHERE device_name = ?',
+                       ('NONE',
+                        device_name))
 
-    logging.info('Result: Deleted certificate')
+        database.commit()
+
+        global certificates_dir
+
+        if os.path.exists(f'{certificates_dir}/{device_name}.pem'):
+            os.unlink(f'{certificates_dir}/{device_name}.pem')
+
+            logging.info('Result: Deleted certificate')
 
     send_request(client_socket, COMMAND_END_SESSION, session_id, {
         ELEMENT_REASON: REASON_NONE
@@ -544,12 +588,13 @@ def main():
         except getopt.GetoptError as error:
             raise ProgramError(error.msg[0].upper() + error.msg[1:])
 
-        global database_file, validity_days
+        global database_file, certificates_dir, validity_days
 
         port = 3804
         timeout = 10
         capf_certificate_file = None
         issuer_certificate_file = None
+        certificates_dir = None
         help = False
 
         for option, argument in options:
@@ -595,7 +640,7 @@ def main():
                 help = True
 
         if help:
-            print('Usage: ' + os.path.basename(sys.argv[0]) + ' [OPTIONS] DATABASE-FILE\n'
+            print('Usage: ' + os.path.basename(sys.argv[0]) + ' [OPTIONS] DATABASE-FILE [PHONE-CERTS-DIR]\n'
                   'Issue X509 certficates to phones.\n'
                   '\n'
                   '  -A, --capf CAPF-CERT-FILE        CAPF certificate\n'
@@ -605,17 +650,23 @@ def main():
                   '  -d, --days DAYS                  number of days the certificate will be valid (default 365)\n'
                   '  -H, --help                       print this help and exit\n'
                   '\n'
-                  'If no ISSUER-CERT-FILE is supplied CAPF-CERT-FILE will be used.')
+                  'If no ISSUER-CERT-FILE is supplied CAPF-CERT-FILE will be used.\n'
+                  'PHONE-CERTS-DIR defaults to the location of DATABASE-FILE.\n')
 
             return
 
-        if not len(arguments):
+        if len(arguments) < 1:
             raise ProgramError('No database file specified')
 
         database_file = arguments[0]
 
+        if len(arguments) < 2:
+            certificates_dir = os.path.dirname(database_file)
+        else:
+            certificates_dir = arguments[1]
+
         if capf_certificate_file is None:
-            raise ProgramError('No CAPF certificate .pem file specified')
+            raise ProgramError('No CAPF certificate file specified')
 
         if issuer_certificate_file is None:
             issuer_certificate_file = capf_certificate_file

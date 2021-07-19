@@ -386,7 +386,7 @@ def main():
         database_file = arguments[0]
 
         if tvs_certificate_file is None:
-            raise ProgramError('No TVS certificate .pem file specified')
+            raise ProgramError('No TVS certificate file specified')
 
         start_server(port, timeout, tvs_certificate_file)
 
