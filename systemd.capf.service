@@ -7,7 +7,7 @@ After=network.target
 
 [Service]
 User=capf
-ExecStart=/usr/sbin/capfd /var/lib/capfd/capf.sqlite3 -A /var/lib/capf/capf.pem
+ExecStart=/usr/sbin/capfd /var/lib/capf/capf.sqlite3 -A /var/lib/capf/capf.pem
 
 [Install]
 WantedBy=multi-user.target
