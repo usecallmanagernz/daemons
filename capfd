@@ -46,7 +46,7 @@ COMMAND_DELETE_CERT_RESPONSE = 14
 COMMAND_END_SESSION = 15
 COMMAND_RETRY_LATER = 16
 COMMAND_REQUEST_IN_PROGRESS = 17
-COMMAND_STATUS_ENQUIRY = 18
+COMMAND_STATUS_REQUEST = 18
 COMMAND_STATUS_RESPONSE = 19
 COMMAND_ABORT_REQUEST = 20
 COMMAND_ABORT_RESPONSE = 21
@@ -72,9 +72,10 @@ ELEMENT_EC_CURVE = 18
 ELEMENT_DIGEST_TYPE = 19
 ELEMENT_SIGNED_DATA_SHA2 = 20
 
-REASON_NONE = 1
-REASON_OPERATION = 7
-REASON_DEVICE = 9
+REASON_NO_ACTION = 0
+REASON_UPDATE_CERTIFICATE = 1
+REASON_INVALID_ELEMENT = 7
+REASON_UNKNOWN_DEVICE = 9
 
 AUTH_TYPE_NONE = 0
 AUTH_TYPE_PASSWORD = 1
@@ -252,12 +253,12 @@ def install_certificate(client_socket, session_id, device_name, key_size, databa
     public_key = elements.get(ELEMENT_PUBLIC_KEY, None)
 
     if public_key is None:
-        reason = elements.get(ELEMENT_REASON, None)
+        reason = elements.get(ELEMENT_REASON, -1)
 
         logging.info('Error: Key generation failed %d', reason)
 
         send_request(client_socket, COMMAND_END_SESSION, session_id, {
-            ELEMENT_REASON: REASON_OPERATION
+            ELEMENT_REASON: REASON_INVALID_ELEMENT
         })
 
         return
@@ -336,13 +337,13 @@ def install_certificate(client_socket, session_id, device_name, key_size, databa
     if command != COMMAND_STORE_CERT_RESPONSE:
         raise ProgramError(f'Unexpected command: {command}')
 
-    reason = elements.get(ELEMENT_REASON, None)
+    reason = elements.get(ELEMENT_REASON, -1)
 
-    if reason != REASON_NONE:
+    if reason != REASON_UPDATE_CERTIFICATE:
         logging.info('Error: Failed to store certificate %d', reason)
 
     send_request(client_socket, COMMAND_END_SESSION, session_id, {
-        ELEMENT_REASON: REASON_NONE
+        ELEMENT_REASON: REASON_UPDATE_CERTIFICATE
     })
 
 
@@ -353,9 +354,9 @@ def fetch_certificate(client_socket, session_id, device_name, database):
     if command != COMMAND_FETCH_CERT_RESPONSE:
         raise ProgramError(f'Unexpected command: {command}')
 
-    reason = elements.get(ELEMENT_REASON, None)
+    reason = elements.get(ELEMENT_REASON, -1)
 
-    if reason != REASON_NONE:
+    if reason != REASON_UPDATE_CERTIFICATE:
         logging.info('Error: Fetch certificate failed %d', reason)
     else:
         certificate = elements.get(ELEMENT_CERTIFICATE, None)
@@ -393,7 +394,7 @@ def fetch_certificate(client_socket, session_id, device_name, database):
             logging.info('Result: Fetched certificate')
 
     send_request(client_socket, COMMAND_END_SESSION, session_id, {
-        ELEMENT_REASON: REASON_NONE
+        ELEMENT_REASON: REASON_NO_ACTION
     })
 
 
@@ -404,9 +405,9 @@ def delete_certificate(client_socket, session_id, device_name, database):
     if command != COMMAND_DELETE_CERT_RESPONSE:
         raise ProgramError(f'Unexpected command: {command}')
 
-    reason = elements.get(ELEMENT_REASON, None)
+    reason = elements.get(ELEMENT_REASON, -1)
 
-    if reason != REASON_NONE:
+    if reason != REASON_UPDATE_CERTIFICATE:
         logging.info('Error: Deleted certificate failed {reason}')
     else:
         cursor = database.cursor()
@@ -426,7 +427,7 @@ def delete_certificate(client_socket, session_id, device_name, database):
             logging.info('Result: Deleted certificate')
 
     send_request(client_socket, COMMAND_END_SESSION, session_id, {
-        ELEMENT_REASON: REASON_NONE
+        ELEMENT_REASON: REASON_UPDATE_CERTIFICATE
     })
 
 
@@ -476,14 +477,14 @@ def handle_client(client_socket):
                 logging.info('Unknown device: %s', device_name)
 
                 send_request(client_socket, COMMAND_END_SESSION, session_id, {
-                    ELEMENT_REASON: REASON_DEVICE
+                    ELEMENT_REASON: REASON_UNKNOWN_DEVICE
                 })
 
             elif row['password'] is not None and row['password'] != password:
                 logging.info('Incorrect password: %s', password)
 
                 send_request(client_socket, COMMAND_END_SESSION, session_id, {
-                    ELEMENT_REASON: REASON_OPERATION
+                    ELEMENT_REASON: REASON_INVALID_ELEMENT
                 })
 
             else:
@@ -501,7 +502,7 @@ def handle_client(client_socket):
 
                 elif row['operation'] == 'NONE':
                     send_request(client_socket, COMMAND_END_SESSION, session_id, {
-                        ELEMENT_REASON: REASON_OPERATION
+                        ELEMENT_REASON: REASON_NO_ACTION
                     })
 
     except (ProgramError, sqlite3.Error) as error:

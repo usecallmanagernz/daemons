@@ -39,7 +39,7 @@ COMMAND_DELETE_CERT_RESPONSE = 14
 COMMAND_END_SESSION = 15
 COMMAND_RETRY_LATER = 16
 COMMAND_REQUEST_IN_PROGRESS = 17
-COMMAND_STATUS_ENQUIRY = 18
+COMMAND_STATUS_REQUEST = 18
 COMMAND_STATUS_RESPONSE = 19
 COMMAND_ABORT_REQUEST = 20
 COMMAND_ABORT_RESPONSE = 21
@@ -65,9 +65,10 @@ ELEMENT_EC_CURVE = 18
 ELEMENT_DIGEST_TYPE = 19
 ELEMENT_SIGNED_DATA_SHA2 = 20
 
-REASON_NONE = 1
-REASON_OPERATION = 7
-REASON_DEVICE = 9
+REASON_NO_ACTION = 0
+REASON_UPDATE_CERTIFICATE = 1
+REASON_INVALID_ELEMENT = 7
+REASON_UNKNOWN_DEVICE = 9
 
 AUTH_TYPE_NONE = 0
 AUTH_TYPE_PASSWORD = 1
@@ -249,7 +250,7 @@ def next_operation(server_socket, device_name, password, certificate_file):
         raise ProgramError(f'Invalid PROTOCOL_VERSION: {version}')
 
     elements = {
-        ELEMENT_REASON: REASON_NONE,
+        ELEMENT_REASON: REASON_UPDATE_CERTIFICATE,
         ELEMENT_VERSION: PROTOCOL_VERSION,
         ELEMENT_DEVICE_NAME: device_name
     }
@@ -280,11 +281,11 @@ def next_operation(server_socket, device_name, password, certificate_file):
         delete_certificate(server_socket, session_id, certificate_file)
 
     elif command == COMMAND_END_SESSION:
-        reason = elements.get(ELEMENT_REASON, None)
+        reason = elements.get(ELEMENT_REASON, -1)
 
-        if reason == REASON_OPERATION:
+        if reason in (REASON_NO_ACTION, REASON_UPDATE_CERTIFICATE):
             print(f'No scheduled operation')
-        elif reason == REASON_DEVICE:
+        elif reason == REASON_UNKNOWN_DEVICE:
             print(f'Unknown device {device_name}')
         else:
             print(f'Server ended session: {reason}')
@@ -320,7 +321,7 @@ def generate_key(server_socket, session_id, key_size, certificate_file):
         print(f'Invalid certificate')
 
         send_response(server_socket, COMMAND_STORE_CERT_RESPONSE, session_id, {
-            ELEMENT_REASON: REASON_DEVICE
+            ELEMENT_REASON: REASON_INVALID_ELEMENT
         })
 
     else:
@@ -331,7 +332,7 @@ def generate_key(server_socket, session_id, key_size, certificate_file):
         print(f'Wrote {certificate_file}')
 
         send_response(server_socket, COMMAND_STORE_CERT_RESPONSE, session_id, {
-            ELEMENT_REASON: REASON_NONE
+            ELEMENT_REASON: REASON_UPDATE_CERTIFICATE
         })
 
     command, session_id, elements = receive_request(server_socket)
@@ -362,7 +363,7 @@ def store_certificate(server_socket, session_id, certificate_file):
 
     else:
         send_response(server_socket, COMMAND_FETCH_CERT_RESPONSE, session_id, {
-            ELEMENT_REASON: REASON_DEVICE
+            ELEMENT_REASON: REASON_INVALID_ELEMENT
         })
 
         print(f'{certificate_file} does not exist')
@@ -378,14 +379,14 @@ def delete_certificate(server_socket, session_id, certificate_file):
         os.unlink(certificate_file)
 
         send_response(server_socket, COMMAND_DELETE_CERT_RESPONSE, session_id, {
-            ELEMENT_REASON: REASON_NONE
+            ELEMENT_REASON: REASON_UPDATE_CERTIFICATE
         })
 
         print(f'Deleted {certificate_file}')
 
     else:
         send_response(server_socket, COMMAND_DELETE_CERT_RESPONSE, session_id, {
-            ELEMENT_REASON: REASON_DEVICE
+            ELEMENT_REASON: REASON_INVALID_ELEMENT
         })
 
         print(f'{certificate_file} does not exist')
@@ -468,7 +469,7 @@ def main():
                   '  -H, --help                         print this help and exit\n'
                   '\n'
                   'DEVICE-NAME is in SEPMAC format, eg: SEP58971ECC97C1.\n'
-                  'Default PORT for CAPF server is 3804.')
+                  'Default PORT for CAPF server is 3804.\n')
 
             return
 
