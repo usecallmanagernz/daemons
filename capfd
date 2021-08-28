@@ -150,7 +150,7 @@ def send_request(client_socket, command, session_id, elements):
     client_socket.send(request)
 
 
-def receive_response(client_socket):
+def receive_response(client_socket, server_session_id):
     response = client_socket.recv(8)
 
     if not len(response):
@@ -163,6 +163,9 @@ def receive_response(client_socket):
 
     if protocol_id != PROTOCOL_ID:
         raise ProgramError(f'Invalid protocol ID: {protocol_id}')
+
+    if session_id != server_session_id:
+        raise ProgramError(f'Mismatched session ID: {session_id}')
 
     while len(response) < (length + 8):
         response += client_socket.recv((length + 8) - len(response))
@@ -240,12 +243,12 @@ def install_certificate(client_socket, session_id, device_name, key_size, databa
         ELEMENT_KEY_TYPE: KEY_TYPE_RSA
     })
 
-    command, session_id, elements = receive_response(client_socket)
+    command, session_id, elements = receive_response(client_socket, session_id)
 
     if command != COMMAND_REQUEST_IN_PROGRESS:
         raise ProgramError(f'Unexpected command: {command}')
 
-    command, session_id, elements = receive_response(client_socket)
+    command, session_id, elements = receive_response(client_socket, session_id)
 
     if command != COMMAND_KEY_GEN_RESPONSE:
         raise ProgramError(f'Unexpected command: {command}')
@@ -262,6 +265,8 @@ def install_certificate(client_socket, session_id, device_name, key_size, databa
         })
 
         return
+
+    logging.info('Key Size: %s', key_size)
 
     global issuer_certificate, issuer_private_key, validity_days
 
@@ -324,15 +329,19 @@ def install_certificate(client_socket, session_id, device_name, key_size, databa
 
     global certificates_dir
 
-    with open(f'{certificates_dir}/{device_name}.pem', 'wb') as file:
-        file.write(certificate.public_bytes(serialization.Encoding.PEM))
+    try:
+        with open(f'{certificates_dir}/{device_name}.pem', 'wb') as file:
+            file.write(certificate.public_bytes(serialization.Encoding.PEM))
+
+    except (PermissionError, IsADirectoryError) as error:
+        raise ProgramError(f'{error.strerror}: {error.filename}')
 
     send_request(client_socket, COMMAND_STORE_CERT_REQUEST, session_id, {
         ELEMENT_CERTIFICATE_TYPE: CERTIFICATE_TYPE_LSC,
         ELEMENT_CERTIFICATE: certificate.public_bytes(serialization.Encoding.DER)
     })
 
-    command, session_id, elements = receive_response(client_socket)
+    command, session_id, elements = receive_response(client_socket, session_id)
 
     if command != COMMAND_STORE_CERT_RESPONSE:
         raise ProgramError(f'Unexpected command: {command}')
@@ -349,7 +358,7 @@ def install_certificate(client_socket, session_id, device_name, key_size, databa
 
 def fetch_certificate(client_socket, session_id, device_name, database):
     send_request(client_socket, COMMAND_FETCH_CERT_REQUEST, session_id, {})
-    command, session_id, elements = receive_response(client_socket)
+    command, session_id, elements = receive_response(client_socket, session_id)
 
     if command != COMMAND_FETCH_CERT_RESPONSE:
         raise ProgramError(f'Unexpected command: {command}')
@@ -400,7 +409,7 @@ def fetch_certificate(client_socket, session_id, device_name, database):
 
 def delete_certificate(client_socket, session_id, device_name, database):
     send_request(client_socket, COMMAND_DELETE_CERT_REQUEST, session_id, {})
-    command, session_id, elements = receive_response(client_socket)
+    command, session_id, elements = receive_response(client_socket, session_id)
 
     if command != COMMAND_DELETE_CERT_RESPONSE:
         raise ProgramError(f'Unexpected command: {command}')
@@ -422,7 +431,10 @@ def delete_certificate(client_socket, session_id, device_name, database):
         global certificates_dir
 
         if os.path.exists(f'{certificates_dir}/{device_name}.pem'):
-            os.unlink(f'{certificates_dir}/{device_name}.pem')
+            try:
+                os.unlink(f'{certificates_dir}/{device_name}.pem')
+            except (PermissionError, IsADirectoryError) as error:
+                raise ProgramError(f'{error.strerror}: {error.filename}')
 
             logging.info('Result: Deleted certificate')
 
@@ -443,7 +455,7 @@ def handle_client(client_socket):
             ELEMENT_AUTH_TYPE: AUTH_TYPE_NONE
         })
 
-        command, session_id, elements = receive_response(client_socket)
+        command, session_id, elements = receive_response(client_socket, session_id)
 
         if command != COMMAND_AUTH_RESPONSE:
             raise ProgramError(f'Unexpected command: {command}')
@@ -491,7 +503,6 @@ def handle_client(client_socket):
                 logging.info('Operation: %s', row['operation'])
 
                 if row['operation'] == 'INSTALL':
-                    logging.info('Key Size: %s', row['key_size'])
                     install_certificate(client_socket, session_id, device_name, row['key_size'], database)
 
                 elif row['operation'] == 'FETCH':

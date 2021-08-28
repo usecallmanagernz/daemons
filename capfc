@@ -139,7 +139,7 @@ def send_response(server_socket, command, session_id, elements):
     server_socket.send(response)
 
 
-def receive_request(server_socket):
+def receive_request(server_socket, server_session_id):
     request = server_socket.recv(8)
 
     if not len(request):
@@ -152,6 +152,9 @@ def receive_request(server_socket):
 
     if protocol_id != PROTOCOL_ID:
         raise ProgramError(f'Invalid protocol ID: {protocol_id}')
+
+    if server_session_id is not None and session_id != server_session_id:
+        raise ProgramError(f'Mismatched session ID: {session_id}')
 
     while len(request) < (length + 8):
         request += server_socket.recv((length + 8) - len(request))
@@ -239,10 +242,10 @@ def create_socket(hostname, port, timeout, capf_certificate_file):
 
 
 def next_operation(server_socket, device_name, password, certificate_file):
-    command, session_id, elements = receive_request(server_socket)
+    command, session_id, elements = receive_request(server_socket, None)
 
     if command != COMMAND_AUTH_REQUEST:
-        raise ProgramError(f'Command is not COMMAND_AUTH_REQUEST: {command}')
+        raise ProgramError(f'Unexpected command: {command}')
 
     version = elements.get(ELEMENT_VERSION, None)
 
@@ -259,7 +262,7 @@ def next_operation(server_socket, device_name, password, certificate_file):
         elements[ELEMENT_AUTH_PASSWORD] = password
 
     send_response(server_socket, COMMAND_AUTH_RESPONSE, session_id, elements)
-    command, session_id, elements = receive_request(server_socket)
+    command, session_id, elements = receive_request(server_socket, session_id)
 
     if command == COMMAND_KEY_GEN_REQUEST:
         key_size = elements.get(ELEMENT_KEY_SIZE, None)
@@ -291,7 +294,7 @@ def next_operation(server_socket, device_name, password, certificate_file):
             print(f'Server ended session: {reason}')
 
     else:
-        print(f'Unexpected COMMAND: {command}')
+        raise ProgramError(f'Unexpected command: {command}')
 
 
 def generate_key(server_socket, session_id, key_size, certificate_file):
@@ -304,11 +307,10 @@ def generate_key(server_socket, session_id, key_size, certificate_file):
         ELEMENT_PUBLIC_KEY: public_key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
     })
 
-    command, session_id, elements = receive_request(server_socket)
+    command, session_id, elements = receive_request(server_socket, session_id)
 
     if command != COMMAND_STORE_CERT_REQUEST:
-        print(f'Unexpected COMMAND: {command}')
-        return
+        raise ProgramError(f'Unexpected command: {command}')
 
     certificate = elements.get(ELEMENT_CERTIFICATE, None)
 
@@ -318,27 +320,25 @@ def generate_key(server_socket, session_id, key_size, certificate_file):
     try:
         certificate = x509.load_der_x509_certificate(certificate, backends.default_backend())
     except ValueError:
-        print(f'Invalid certificate')
+        raise ProgramError('Invalid certificate')
 
-        send_response(server_socket, COMMAND_STORE_CERT_RESPONSE, session_id, {
-            ELEMENT_REASON: REASON_INVALID_ELEMENT
-        })
-
-    else:
+    try:
         with open(certificate_file, 'wb') as file:
             file.write(certificate.public_bytes(serialization.Encoding.PEM))
             file.write(private_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    except (PermissionError, IsADirectoryError) as error:
+        raise ProgramError(f'{error.strerror}: {error.filename}')
 
-        print(f'Wrote {certificate_file}')
+    print(f'Wrote {certificate_file}')
 
-        send_response(server_socket, COMMAND_STORE_CERT_RESPONSE, session_id, {
-            ELEMENT_REASON: REASON_UPDATE_CERTIFICATE
-        })
+    send_response(server_socket, COMMAND_STORE_CERT_RESPONSE, session_id, {
+        ELEMENT_REASON: REASON_UPDATE_CERTIFICATE
+    })
 
-    command, session_id, elements = receive_request(server_socket)
+    command, session_id, elements = receive_request(server_socket, session_id)
 
     if command != COMMAND_END_SESSION:
-        print(f'Unexpected COMMAND: {command}')
+        raise ProgramError(f'Unexpected command: {command}')
 
 
 def store_certificate(server_socket, session_id, certificate_file):
@@ -347,7 +347,7 @@ def store_certificate(server_socket, session_id, certificate_file):
             with open(certificate_file, 'rb') as file:
                 certificate = file.read()
 
-        except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
+        except (PermissionError, IsADirectoryError) as error:
             raise ProgramError(f'{error.strerror}: {error.filename}')
 
         try:
@@ -368,15 +368,18 @@ def store_certificate(server_socket, session_id, certificate_file):
 
         print(f'{certificate_file} does not exist')
 
-    command, session_id, elements = receive_request(server_socket)
+    command, session_id, elements = receive_request(server_socket, session_id)
 
     if command != COMMAND_END_SESSION:
-        print(f'Unexpected COMMAND: {command}')
+        raise ProgramError(f'Unexpected command: {command}')
 
 
 def delete_certificate(server_socket, session_id, certificate_file):
     if os.path.exists(certificate_file):
-        os.unlink(certificate_file)
+        try:
+            os.unlink(certificate_file)
+        except (PermissionError, IsADirectoryError) as error:
+            raise ProgramError(f'{error.strerror}: {error.filename}')
 
         send_response(server_socket, COMMAND_DELETE_CERT_RESPONSE, session_id, {
             ELEMENT_REASON: REASON_UPDATE_CERTIFICATE
@@ -391,10 +394,10 @@ def delete_certificate(server_socket, session_id, certificate_file):
 
         print(f'{certificate_file} does not exist')
 
-    command, session_id, elements = receive_request(server_socket)
+    command, session_id, elements = receive_request(server_socket, session_id)
 
     if command != COMMAND_END_SESSION:
-        print(f'Unexpected COMMAND: {command}')
+        raise ProgramError(f'Unexpected command: {command}')
 
 
 def main():
@@ -448,7 +451,7 @@ def main():
             elif option in ('-p', '--password'):
                 password = argument
 
-                if not re.search('(?x) [0-9]{4,16} $', password):
+                if not re.search(r'(?x) [0-9]{4,16} $', password):
                     raise ProgramError(f'Invalid password: {password}')
 
             elif option in ('-c', '--certificate'):
@@ -465,7 +468,7 @@ def main():
                   '  -h, --host HOST[:PORT]             host name or IP address and port of the CAPF server\n'
                   '  -t, --timeout TIMEOUT              connection timeout in seconds (default 10)\n'
                   '  -c, --certificate CERT-FILE        phone certificate (default DEVICE-NAME.pem)\n'
-                  '  -p, --password PASSWORD            authentication password, 4 to 16 characters\n'
+                  '  -p, --password PASSWORD            authentication password, 4 to 16 numbers\n'
                   '  -H, --help                         print this help and exit\n'
                   '\n'
                   'DEVICE-NAME is in SEPMAC format, eg: SEP58971ECC97C1.\n'
@@ -478,7 +481,7 @@ def main():
 
         device_name = arguments[0]
 
-        if not re.search('(?x) ^ SEP [0-9A-F]{12} $', device_name):
+        if not re.search(r'(?x) ^ SEP [0-9A-F]{12} $', device_name):
             raise ProgramError(f'Invalid device name: {device_name}')
 
         if certificate_file is None:

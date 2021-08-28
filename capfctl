@@ -128,10 +128,13 @@ def main():
                 mode = 'set'
                 device_name = argument
 
+                if not re.search(r'(?x) ^ SEP [0-9A-F]{12} $', device_name):
+                    raise ProgramError(f'Invalid device name: {device_name}')
+
             elif option in ('-o', '--operation'):
                 operation = argument
 
-                if not re.search('(?xi) ^ (?: install | fetch | delete | none) $', operation):
+                if not re.search(r'(?xi) ^ (?: install | fetch | delete | none) $', operation):
                     raise ProgramError(f'Invalid operation: {operation}')
 
                 operation = operation.upper()

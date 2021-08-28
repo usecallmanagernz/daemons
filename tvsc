@@ -75,7 +75,7 @@ def send_request(server_socket, command, session_id, elements):
     server_socket.send(request)
 
 
-def receive_response(server_socket):
+def receive_response(server_socket, client_session_id):
     response = server_socket.recv(10)
 
     if not len(response):
@@ -91,6 +91,9 @@ def receive_response(server_socket):
 
     if version != PROTOCOL_VERSION:
         raise ProgramError(f'Invalid protocol version: {version}')
+
+    if session_id != client_session_id:
+        raise ProgramError(f'Mismatched session ID: {session_id}')
 
     while len(response) < (length + 10):
         response += server_socket.recv((length + 10) - len(response))
@@ -174,6 +177,18 @@ def verify_certificate(server_socket, certificate_file, device_name):
     serial_number = serial_number.to_bytes((serial_number.bit_length() + 7) // 8, byteorder = 'big')
     serial_number = binascii.hexlify(serial_number).decode('utf-8')
 
+    session_id = 1
+
+    send_request(server_socket, COMMAND_VERIFY_REQUEST, session_id, {
+        ELEMENT_DEVICE_NAME: device_name,
+        ELEMENT_CERTIFICATE: certificate.public_bytes(serialization.Encoding.DER)
+    })
+
+    command, session_id, elements = receive_response(server_socket, session_id)
+
+    if command != COMMAND_VERIFY_RESPONSE:
+        raise ProgramError(f'Unexpected command: {command}')
+
     print(f'Serial Number:    {serial_number}')
 
     subject_name = ''
@@ -194,19 +209,6 @@ def verify_certificate(server_socket, certificate_file, device_name):
     certificate_hash = binascii.hexlify(certificate_hash).decode('utf-8')
 
     print(f'Certificate Hash: {certificate_hash}')
-
-    command = COMMAND_NONE
-    session_id = 1
-
-    send_request(server_socket, COMMAND_VERIFY_REQUEST, session_id, {
-        ELEMENT_DEVICE_NAME: device_name,
-        ELEMENT_CERTIFICATE: certificate.public_bytes(serialization.Encoding.DER)
-    })
-
-    command, session_id, elements = receive_response(server_socket)
-
-    if command != COMMAND_VERIFY_RESPONSE:
-        raise ProgramError(f'Unexpected COMMAND: {command}')
 
     status = elements.get(ELEMENT_STATUS, None)
 
