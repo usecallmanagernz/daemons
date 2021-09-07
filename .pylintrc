@@ -1,9 +1,8 @@
 [MASTER]
 persistent=no
-dummy-variables-rgx=(_+[a-zA-Z0-9]*?$)|dummy|unused
 
 [MESSAGES CONTROL]
-disable=missing-module-docstring,missing-class-docstring,missing-function-docstring,bad-whitespace,invalid-name,line-too-long,redefined-builtin,too-many-statements,too-many-branches,too-many-locals,too-many-arguments,broad-except,consider-using-sys-exit,len-as-condition,no-else-continue,duplicate-code,too-many-nested-blocks,global-statement,redefined-outer-name
+disable=missing-module-docstring,missing-class-docstring,missing-function-docstring,bad-whitespace,line-too-long,too-many-locals,len-as-condition,too-many-branches,redefined-builtin,too-many-locals,broad-except,too-many-nested-blocks,consider-using-sys-exit,too-many-statements,no-self-use
 
 [REPORTS]
 output-format=text

@@ -50,204 +50,210 @@ class ProgramError(Exception):
     pass
 
 
-def send_request(server_socket, command, session_id, elements):
-    request = bytearray()
-    request += struct.pack('> B B B B I H', PROTOCOL_ID, PROTOCOL_VERSION, command, 0, session_id, 0)
+class TvsClient:
+    session_id = 0
 
-    for tag, value in elements.items():
-        if tag == ELEMENT_DEVICE_NAME:
-            device_name = value
-            device_name = b'\x01' + device_name.encode('utf-8')
+    def __init__(self, hostname, port, timeout, tvs_certificate_file):
+        self.socket = None
+        self.session_id = None
 
-            request += struct.pack('> B H', ELEMENT_DEVICE_NAME, len(device_name))
-            request += device_name
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
-        elif tag == ELEMENT_CERTIFICATE:
-            certificate = value
+        try:
+            if os.path.isdir(tvs_certificate_file):
+                ssl_context.load_verify_locations(cadir = tvs_certificate_file)
+            else:
+                ssl_context.load_verify_locations(cafile = tvs_certificate_file)
 
-            request += struct.pack('> B H', ELEMENT_CERTIFICATE, len(certificate))
-            request += certificate
+        except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
+            raise ProgramError(f'Unable to load {tvs_certificate_file}: {error.strerror}')
 
+        ssl_context.verify_mode = ssl.CERT_REQUIRED
+        ssl_context.check_hostname = False
+
+        try:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.settimeout(timeout)
+
+            self.socket = ssl_context.wrap_socket(self.socket, server_side = False)
+            self.socket.connect((hostname, port))
+
+        except ssl.SSLError as error:
+            raise ProgramError(error.reason)
+
+        except OSError as error:
+            raise ProgramError(error.strerror)
+
+    def __del__(self):
+        if self.socket is not None:
+            self.socket.close()
+
+    def send_request(self, command, elements):
+        request = bytearray()
+        request += struct.pack('> B B B B I H', PROTOCOL_ID, PROTOCOL_VERSION, command, 0, self.session_id, 0)
+
+        for tag, value in elements.items():
+            if tag == ELEMENT_DEVICE_NAME:
+                device_name = value
+                device_name = b'\x01' + device_name.encode('utf-8')
+
+                request += struct.pack('> B H', ELEMENT_DEVICE_NAME, len(device_name))
+                request += device_name
+
+            elif tag == ELEMENT_CERTIFICATE:
+                certificate = value
+
+                request += struct.pack('> B H', ELEMENT_CERTIFICATE, len(certificate))
+                request += certificate
+
+            else:
+                raise ProgramError(f'Unknown element tag: {tag}')
+
+        struct.pack_into('> H', request, 8, len(request) - 10)
+        self.socket.send(request)
+
+    def receive_response(self):
+        response = self.socket.recv(10)
+
+        if not len(response):
+            raise ProgramError('Server closed socket')
+
+        if len(response) != 10:
+            raise ProgramError('Invalid header length')
+
+        (protocol_id, version, command, session_id, length) = struct.unpack_from('> B B B x I H', response, 0)
+
+        if protocol_id != PROTOCOL_ID:
+            raise ProgramError(f'Invalid protocol ID: {protocol_id}')
+
+        if version != PROTOCOL_VERSION:
+            raise ProgramError(f'Invalid protocol version: {version}')
+
+        if session_id != self.session_id:
+            raise ProgramError(f'Mismatched session ID: {session_id}')
+
+        while len(response) < (length + 10):
+            response += self.socket.recv((length + 10) - len(response))
+
+        elements = {}
+        index = 10
+
+        while index < len(response):
+            (tag, length) = struct.unpack_from('> B H', response, index)
+            index += 3
+
+            if tag == ELEMENT_STATUS:
+                status = response[index]
+                elements[ELEMENT_STATUS] = status
+
+            elif tag == ELEMENT_ROLES:
+                roles = []
+
+                for role in response[index:index + length]:
+                    roles.append(role)
+
+                elements[ELEMENT_ROLES] = roles
+
+            elif tag == ELEMENT_TTL:
+                (ttl,) = struct.unpack_from('> I', response, index)
+                elements[ELEMENT_TTL] = ttl
+
+            else:
+                raise ProgramError(f'Unknown element tag: {tag}')
+
+            index += length
+
+        return command, elements
+
+    def verify_certificate(self, device_name, certificate_file):
+        try:
+            with open(certificate_file, 'rb') as file:
+                certificate = file.read()
+
+        except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
+            raise ProgramError(f'{error.strerror}: {error.filename}')
+
+        try:
+            certificate = x509.load_pem_x509_certificate(certificate, backends.default_backend())
+        except ValueError:
+            raise ProgramError(f'No certificate in file: {certificate_file}')
+
+        serial_number = serial_number = certificate.serial_number
+        serial_number = serial_number.to_bytes((serial_number.bit_length() + 7) // 8, byteorder = 'big')
+        serial_number = binascii.hexlify(serial_number).decode('utf-8')
+
+        TvsClient.session_id += 1
+        self.session_id = TvsClient.session_id
+
+        self.send_request(COMMAND_VERIFY_REQUEST, {
+            ELEMENT_DEVICE_NAME: device_name,
+            ELEMENT_CERTIFICATE: certificate.public_bytes(serialization.Encoding.DER)
+        })
+
+        command, elements = self.receive_response()
+
+        if command != COMMAND_VERIFY_RESPONSE:
+            raise ProgramError(f'Unexpected command: {command}')
+
+        print(f'Serial Number:    {serial_number}')
+
+        subject_name = ''
+
+        for attribute in certificate.subject:
+            subject_name += (';' if len(subject_name) else '') + attribute.rfc4514_string()
+
+        print(f'Subject Name:     {subject_name}')
+
+        issuer_name = ''
+
+        for attribute in certificate.issuer:
+            issuer_name += (';' if len(issuer_name) else '') + attribute.rfc4514_string()
+
+        print(f'Issuer Name:      {issuer_name}')
+
+        certificate_hash = certificate.fingerprint(hashes.SHA256())
+        certificate_hash = binascii.hexlify(certificate_hash).decode('utf-8')
+
+        print(f'Certificate Hash: {certificate_hash}')
+
+        status = elements.get(ELEMENT_STATUS, None)
+
+        if status is None:
+            raise ProgramError('No status element')
+
+        print('Status:           ', end = '')
+
+        if status == STATUS_VALID:
+            print('Valid')
         else:
-            raise ProgramError(f'Unknown ELEMENT tag: {tag}')
+            print('Invalid')
 
-    struct.pack_into('> H', request, 8, len(request) - 10)
-    server_socket.send(request)
+        roles = elements.get(ELEMENT_ROLES, [])
 
+        for role in roles:
+            print('Role:             ', end = '')
 
-def receive_response(server_socket, client_session_id):
-    response = server_socket.recv(10)
+            if role == ROLE_SAST:
+                print('SAST')
+            elif role == ROLE_CCM:
+                print('CCM')
+            elif role == ROLE_CCM_TFTP:
+                print('CCM+TFTP')
+            elif role == ROLE_TFTP:
+                print('TFTP')
+            elif role == ROLE_CAPF:
+                print('CAPF')
+            elif role == ROLE_APP_SERVER:
+                print('APP-SERVER')
+            elif role == ROLE_TVS:
+                print('TVS')
+            else:
+                print(f'{role}')
 
-    if not len(response):
-        raise ProgramError('Server closed socket')
+        ttl = elements.get(ELEMENT_TTL, None)
 
-    if len(response) != 10:
-        raise ProgramError('Invalid header length')
-
-    (protocol_id, version, command, session_id, length) = struct.unpack_from('> B B B x I H', response, 0)
-
-    if protocol_id != PROTOCOL_ID:
-        raise ProgramError(f'Invalid protocol ID: {protocol_id}')
-
-    if version != PROTOCOL_VERSION:
-        raise ProgramError(f'Invalid protocol version: {version}')
-
-    if session_id != client_session_id:
-        raise ProgramError(f'Mismatched session ID: {session_id}')
-
-    while len(response) < (length + 10):
-        response += server_socket.recv((length + 10) - len(response))
-
-    elements = {}
-    index = 10
-
-    while index < len(response):
-        (tag, length) = struct.unpack_from('> B H', response, index)
-        index += 3
-
-        if tag == ELEMENT_STATUS:
-            status = response[index]
-            elements[ELEMENT_STATUS] = status
-
-        elif tag == ELEMENT_ROLES:
-            roles = []
-
-            for role in response[index:index + length]:
-                roles.append(role)
-
-            elements[ELEMENT_ROLES] = roles
-
-        elif tag == ELEMENT_TTL:
-            (ttl,) = struct.unpack_from('> I', response, index)
-            elements[ELEMENT_TTL] = ttl
-
-        else:
-            raise ProgramError(f'Unknown ELEMENT tag: {tag}')
-
-        index += length
-
-    return command, session_id, elements
-
-
-def create_socket(hostname, port, timeout, tvs_certificate_file):
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-
-    try:
-        if os.path.isdir(tvs_certificate_file):
-            ssl_context.load_verify_locations(cadir = tvs_certificate_file)
-        else:
-            ssl_context.load_verify_locations(cafile = tvs_certificate_file)
-
-    except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
-        raise ProgramError(f'Unable to load {tvs_certificate_file}: {error.strerror}')
-
-    ssl_context.verify_mode = ssl.CERT_REQUIRED
-    ssl_context.check_hostname = False
-
-    try:
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.settimeout(timeout)
-
-        server_socket = ssl_context.wrap_socket(server_socket, server_side = False)
-        server_socket.connect((hostname, port))
-
-    except ssl.SSLError as error:
-        raise ProgramError(error.reason)
-
-    except OSError as error:
-        raise ProgramError(error.strerror)
-
-    return server_socket
-
-
-def verify_certificate(server_socket, certificate_file, device_name):
-    try:
-        with open(certificate_file, 'rb') as file:
-            certificate = file.read()
-
-    except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
-        raise ProgramError(f'{error.strerror}: {error.filename}')
-
-    try:
-        certificate = x509.load_pem_x509_certificate(certificate, backends.default_backend())
-    except ValueError:
-        raise ProgramError(f'No certificate in file: {certificate_file}')
-
-    serial_number = serial_number = certificate.serial_number
-    serial_number = serial_number.to_bytes((serial_number.bit_length() + 7) // 8, byteorder = 'big')
-    serial_number = binascii.hexlify(serial_number).decode('utf-8')
-
-    session_id = 1
-
-    send_request(server_socket, COMMAND_VERIFY_REQUEST, session_id, {
-        ELEMENT_DEVICE_NAME: device_name,
-        ELEMENT_CERTIFICATE: certificate.public_bytes(serialization.Encoding.DER)
-    })
-
-    command, session_id, elements = receive_response(server_socket, session_id)
-
-    if command != COMMAND_VERIFY_RESPONSE:
-        raise ProgramError(f'Unexpected command: {command}')
-
-    print(f'Serial Number:    {serial_number}')
-
-    subject_name = ''
-
-    for attribute in certificate.subject:
-        subject_name += (';' if len(subject_name) else '') + attribute.rfc4514_string()
-
-    print(f'Subject Name:     {subject_name}')
-
-    issuer_name = ''
-
-    for attribute in certificate.issuer:
-        issuer_name += (';' if len(issuer_name) else '') + attribute.rfc4514_string()
-
-    print(f'Issuer Name:      {issuer_name}')
-
-    certificate_hash = certificate.fingerprint(hashes.SHA256())
-    certificate_hash = binascii.hexlify(certificate_hash).decode('utf-8')
-
-    print(f'Certificate Hash: {certificate_hash}')
-
-    status = elements.get(ELEMENT_STATUS, None)
-
-    if status is None:
-        raise ProgramError('No ELEMENT_STATUS')
-
-    print('Status:           ', end = '')
-
-    if status == STATUS_VALID:
-        print('Valid')
-    else:
-        print('Invalid')
-
-    roles = elements.get(ELEMENT_ROLES, [])
-
-    for role in roles:
-        print('Role:             ', end = '')
-
-        if role == ROLE_SAST:
-            print('SAST')
-        elif role == ROLE_CCM:
-            print('CCM')
-        elif role == ROLE_CCM_TFTP:
-            print('CCM+TFTP')
-        elif role == ROLE_TFTP:
-            print('TFTP')
-        elif role == ROLE_CAPF:
-            print('CAPF')
-        elif role == ROLE_APP_SERVER:
-            print('APP-SERVER')
-        elif role == ROLE_TVS:
-            print('TVS')
-        else:
-            print(f'{role}')
-
-    ttl = elements.get(ELEMENT_TTL, None)
-
-    if ttl is not None:
-        print(f'TTL:              {ttl} seconds')
+        if ttl is not None:
+            print(f'TTL:              {ttl} seconds')
 
 
 def main():
@@ -310,11 +316,11 @@ def main():
             print('Usage: ' + os.path.basename(sys.argv[0]) + ' [OPTIONS] CERT-FILE\n'
                   'Query the validity of a certificate using a TVS server.\n'
                   '\n'
-                  '  -T, --tvs TVS-CERT-FILE            TVS certificate file or directory\n'
-                  '  -h, --host HOST[:PORT]             host name or IP address and port of the TVS server\n'
-                  '  -t, --timeout TIMEOUT              connection timeout in seconds (default 10)\n'
-                  '  -d, --device DEVICE-NAME           device name in CP-MODEL-SEPMAC format (default CP-0000-SEP000000000000)\n'
-                  '  -H, --help                         print this help and exit\n'
+                  '  -T, --tvs TVS-CERT-FILE     TVS certificate file or directory\n'
+                  '  -h, --host HOST[:PORT]      host name or IP address and port of the TVS server\n'
+                  '  -t, --timeout TIMEOUT       connection timeout in seconds (default 10)\n'
+                  '  -d, --device DEVICE-NAME    device name in CP-MODEL-SEPMAC format (default CP-0000-SEP000000000000)\n'
+                  '  -H, --help                  print this help and exit\n'
                   '\n'
                   'Default TVS server PORT is 2445')
 
@@ -331,8 +337,8 @@ def main():
         if tvs_certificate_file is None:
             raise ProgramError('No TVS certificate file specified')
 
-        with create_socket(hostname, port, timeout, tvs_certificate_file) as server_socket:
-            verify_certificate(server_socket, certificate_file, device_name)
+        tvs_client = TvsClient(hostname, port, timeout, tvs_certificate_file)
+        tvs_client.verify_certificate(device_name, certificate_file)
 
     except ProgramError as error:
         print(str(error), file = sys.stderr)

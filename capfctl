@@ -195,11 +195,10 @@ def main():
         database_file = arguments[0]
 
         with sqlite3.connect(database_file) as database:
-            # Empty database
+            database.row_factory = sqlite3.Row
+
             if not os.path.getsize(database_file):
                 initalise_database(database)
-
-            database.row_factory = sqlite3.Row
 
             if mode == 'set':
                 if operation is None:

@@ -47,11 +47,7 @@ ROLE_APP_SERVER = 7
 ROLE_TVS = 21
 
 
-database_file = None
-default_ttl = 86400
-
-
-threading.main_thread().name = 'main-thread'
+threading.main_thread().name = 'TVS'
 logging.basicConfig(level = logging.DEBUG, format = '%(threadName)s %(message)s', stream = sys.stdout, force = True)
 
 
@@ -59,259 +55,266 @@ class ProgramError(Exception):
     pass
 
 
-def send_response(client_socket, command, session_id, elements):
-    response = bytearray()
-    response += struct.pack('> B B B B I H', PROTOCOL_ID, PROTOCOL_VERSION, command, 0, session_id, 0)
+class TvsServer:
+    def __init__(self, port, timeout, tvs_certificate_file):
+        self.server_socket = None
 
-    for tag, value in elements.items():
-        if tag == ELEMENT_STATUS:
-            status = value
-            response += struct.pack('> B H B', ELEMENT_STATUS, 1, status)
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 
-        elif tag == ELEMENT_ROLES:
-            roles = value
+        try:
+            ssl_context.load_cert_chain(tvs_certificate_file)
+        except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
+            raise ProgramError(f'{error.strerror}: {error.filename}')
 
-            response += struct.pack('> B H', ELEMENT_ROLES, len(roles))
-            response += roles
+        ssl_context.verify_mode = ssl.CERT_NONE
 
-        elif tag == ELEMENT_TTL:
-            ttl = value
-            response += struct.pack('> B H I', ELEMENT_TTL, 4, ttl)
+        try:
+            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server_socket.settimeout(timeout)
+
+            self.server_socket = ssl_context.wrap_socket(self.server_socket, server_side = True)
+
+            self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, True)
+            self.server_socket.bind(('0.0.0.0', port))
+
+            self.server_socket.listen(5)
+
+        except ssl.SSLError as error:
+            raise ProgramError(error.reason)
+
+        except OSError as error:
+            raise ProgramError(error)
+
+        logging.info('Listening Port: %d', port)
+
+    def __del__(self):
+        if self.server_socket is not None:
+            self.server_socket.close()
+
+    def run(self):
+        poll = select.poll()
+        poll.register(self.server_socket.fileno(), select.POLLIN)
+
+        for signum in signal.SIGINT, signal.SIGQUIT, signal.SIGTERM:
+            signal.signal(signum, self.shutdown)
+
+        try:
+            while True:
+                events = poll.poll(60)
+
+                for fileno, event in events:
+                    if fileno != self.server_socket.fileno() or not event & select.POLLIN:
+                        continue
+
+                    try:
+                        client_socket, _ = self.server_socket.accept()
+
+                    except OSError as error:
+                        logging.error('Error: %s', str(error))
+                        continue
+
+                    ip_address, port = client_socket.getpeername()
+                    tvs_connection = TvsConnection(client_socket)
+
+                    thread = threading.Thread(daemon = True, name = f'{ip_address}:{port}', target = tvs_connection.run)
+                    thread.start()
+
+        except InterruptedError:
+            pass
+
+    def shutdown(self, signum, frame):
+        raise InterruptedError
+
+
+class TvsConnection:
+    database_file = None
+    default_ttl = 86400
+
+    def __init__(self, client_socket):
+        self.client_socket = client_socket
+        self.session_id = None
+
+    def __del__(self):
+        self.client_socket.close()
+
+    def run(self):
+        try:
+            command, elements = self.receive_request()
+
+            if command != COMMAND_VERIFY_REQUEST:
+                raise ProgramError(f'Unexpected command: {command}')
+
+            with sqlite3.connect(TvsConnection.database_file) as database:
+                database.row_factory = sqlite3.Row
+                self.verify_certificate(elements, database)
+
+        except (ProgramError, sqlite3.Error) as error:
+            logging.info('Error: %s', error)
+
+        except Exception:
+            logging.error('%s', traceback.format_exc())
+
+    def send_response(self, command, elements):
+        response = bytearray()
+        response += struct.pack('> B B B B I H', PROTOCOL_ID, PROTOCOL_VERSION, command, 0, self.session_id, 0)
+
+        for tag, value in elements.items():
+            if tag == ELEMENT_STATUS:
+                status = value
+                response += struct.pack('> B H B', ELEMENT_STATUS, 1, status)
+
+            elif tag == ELEMENT_ROLES:
+                roles = value
+
+                response += struct.pack('> B H', ELEMENT_ROLES, len(roles))
+                response += roles
+
+            elif tag == ELEMENT_TTL:
+                ttl = value
+                response += struct.pack('> B H I', ELEMENT_TTL, 4, ttl)
+
+            else:
+                raise ProgramError(f'Unknown element tag: {tag}')
+
+        struct.pack_into('> H', response, 8, len(response) - 10)
+        self.client_socket.send(response)
+
+    def receive_request(self):
+        request = self.client_socket.recv(10)
+
+        if not len(request):
+            raise ProgramError('Client closed socket')
+
+        if len(request) != 10:
+            raise ProgramError('Invalid header length')
+
+        (protocol_id, version, command, session_id, length) = struct.unpack_from('> B B B x I H', request, 0)
+
+        if protocol_id != PROTOCOL_ID:
+            raise ProgramError(f'Invalid protocol ID: {protocol_id}')
+
+        if version != PROTOCOL_VERSION:
+            raise ProgramError(f'Invalid protocol version: {version}')
+
+        if self.session_id is None:
+            self.session_id = session_id
+        elif session_id != self.session_id:
+            raise ProgramError(f'Mismatched session ID: {session_id}')
+
+        while len(request) < (length + 10):
+            request += self.client_socket.recv((length + 10) - len(request))
+
+        elements = {}
+        index = 10
+
+        while index < len(request):
+            (tag, length) = struct.unpack_from('> B H', request, index)
+            index += 3
+
+            if tag == ELEMENT_DEVICE_NAME:
+                device_name = request[index:index + length]
+                device_name = device_name[1:].decode('utf-8')
+
+                elements[ELEMENT_DEVICE_NAME] = device_name
+
+            elif tag == ELEMENT_CERTIFICATE:
+                certificate = request[index:index + length]
+                elements[ELEMENT_CERTIFICATE] = certificate
+
+            else:
+                raise ProgramError(f'Unknown element tag: {tag}')
+
+            index += length
+
+        return command, elements
+
+    def verify_certificate(self, elements, database):
+        device_name = elements.get(ELEMENT_DEVICE_NAME, None)
+
+        if device_name is None:
+            raise ProgramError('No device name')
+
+        if not re.search(r'(?x) ^ CP - [0-9]{4} - SEP [0-9A-F]{12} $', device_name):
+            raise ProgramError(f'Invalid device name: {device_name}')
+
+        logging.info('Device Name: %s', device_name)
+
+        certificate = elements.get(ELEMENT_CERTIFICATE, None)
+
+        if certificate is None:
+            raise ProgramError('Missing certificate element')
+
+        try:
+            certificate = x509.load_der_x509_certificate(certificate, backends.default_backend())
+        except ValueError:
+            raise ProgramError('Invalid certificate')
+
+        serial_number = serial_number = certificate.serial_number
+        serial_number = serial_number.to_bytes((serial_number.bit_length() + 7) // 8, byteorder = 'big')
+        serial_number = binascii.hexlify(serial_number).decode('utf-8')
+
+        logging.info('Serial Number: %s', serial_number)
+
+        subject_name = ''
+
+        for attribute in certificate.subject:
+            subject_name += (';' if len(subject_name) else '') + attribute.rfc4514_string()
+
+        logging.info('Subject Name: %s', subject_name)
+
+        issuer_name = ''
+
+        for attribute in certificate.issuer:
+            issuer_name += (';' if len(issuer_name) else '') + attribute.rfc4514_string()
+
+        logging.info('Issuer Name: %s', issuer_name)
+
+        certificate_hash = certificate.fingerprint(hashes.SHA256())
+        certificate_hash = binascii.hexlify(certificate_hash).decode('utf-8')
+
+        logging.info('Certificate Hash: %s', certificate_hash)
+
+        cursor = database.cursor()
+
+        cursor.execute('SELECT roles, coalesce(ttl, ?) AS ttl FROM certificates WHERE certificate_hash = ?',
+                       (TvsConnection.default_ttl, certificate_hash))
+
+        row = cursor.fetchone()
+
+        if row is not None:
+            logging.info('Status: Valid')
+            logging.info('Roles: %s', row['roles'])
+            logging.info('TTL: %d', row['ttl'])
+
+            roles = bytearray()
+
+            for role in row['roles'].split(','):
+                if role == 'SAST':
+                    roles.append(ROLE_SAST)
+                elif role == 'CCM':
+                    roles.append(ROLE_CCM)
+                elif role == 'CCM+TFTP':
+                    roles.append(ROLE_CCM_TFTP)
+                elif role == 'TFTP':
+                    roles.append(ROLE_TFTP)
+                elif role == 'CAPF':
+                    roles.append(ROLE_CAPF)
+                elif role == 'APP-SERVER':
+                    roles.append(ROLE_APP_SERVER)
+                elif role == 'TVS':
+                    roles.append(ROLE_TVS)
+
+            ttl = row['ttl']
+
+            self.send_response(COMMAND_VERIFY_RESPONSE, {
+                ELEMENT_STATUS: STATUS_VALID,
+                ELEMENT_ROLES: roles,
+                ELEMENT_TTL: ttl
+            })
 
         else:
-            raise ProgramError(f'Unknown ELEMENT tag: {tag}')
-
-    struct.pack_into('> H', response, 8, len(response) - 10)
-    client_socket.send(response)
-
-
-def receive_request(client_socket, client_session_id):
-    request = client_socket.recv(10)
-
-    if not len(request):
-        raise ProgramError('Client closed socket')
-
-    if len(request) != 10:
-        raise ProgramError('Invalid header length')
-
-    (protocol_id, version, command, session_id, length) = struct.unpack_from('> B B B x I H', request, 0)
-
-    if protocol_id != PROTOCOL_ID:
-        raise ProgramError(f'Invalid protocol ID: {protocol_id}')
-
-    if version != PROTOCOL_VERSION:
-        raise ProgramError(f'Invalid protocol version: {version}')
-
-    if client_session_id is not None and session_id != client_session_id:
-        raise ProgramError(f'Unexpected session ID: {session_id}')
-
-    while len(request) < (length + 10):
-        request += client_socket.recv((length + 10) - len(request))
-
-    elements = {}
-    index = 10
-
-    while index < len(request):
-        (tag, length) = struct.unpack_from('> B H', request, index)
-        index += 3
-
-        if tag == ELEMENT_DEVICE_NAME:
-            device_name = request[index:index + length]
-            device_name = device_name[1:].decode('utf-8')
-
-            elements[ELEMENT_DEVICE_NAME] = device_name
-
-        elif tag == ELEMENT_CERTIFICATE:
-            certificate = request[index:index + length]
-            elements[ELEMENT_CERTIFICATE] = certificate
-
-        else:
-            raise ProgramError(f'Unknown ELEMENT tag: {tag}')
-
-        index += length
-
-    return command, session_id, elements
-
-
-def verify_certificate(client_socket, session_id, elements, database):
-    device_name = elements.get(ELEMENT_DEVICE_NAME, None)
-
-    if device_name is None:
-        raise ProgramError('No device name')
-
-    if not re.search(r'(?x) ^ CP - [0-9]{4} - SEP [0-9A-F]{12} $', device_name):
-        raise ProgramError(f'Invalid device name: {device_name}')
-
-    logging.info('Device Name: %s', device_name)
-
-    certificate = elements.get(ELEMENT_CERTIFICATE, None)
-
-    if certificate is None:
-        raise ProgramError('Missing ELEMENT_CERTIFICATE')
-
-    try:
-        certificate = x509.load_der_x509_certificate(certificate, backends.default_backend())
-    except ValueError:
-        raise ProgramError('Invalid certificate')
-
-    serial_number = serial_number = certificate.serial_number
-    serial_number = serial_number.to_bytes((serial_number.bit_length() + 7) // 8, byteorder = 'big')
-    serial_number = binascii.hexlify(serial_number).decode('utf-8')
-
-    logging.info('Serial Number: %s', serial_number)
-
-    subject_name = ''
-
-    for attribute in certificate.subject:
-        subject_name += (';' if len(subject_name) else '') + attribute.rfc4514_string()
-
-    logging.info('Subject Name: %s', subject_name)
-
-    issuer_name = ''
-
-    for attribute in certificate.issuer:
-        issuer_name += (';' if len(issuer_name) else '') + attribute.rfc4514_string()
-
-    logging.info('Issuer Name: %s', issuer_name)
-
-    certificate_hash = certificate.fingerprint(hashes.SHA256())
-    certificate_hash = binascii.hexlify(certificate_hash).decode('utf-8')
-
-    logging.info('Certificate Hash: %s', certificate_hash)
-
-    global default_ttl
-
-    cursor = database.cursor()
-
-    cursor.execute('SELECT roles, coalesce(ttl, ?) AS ttl FROM certificates WHERE certificate_hash = ?',
-                   (default_ttl, certificate_hash))
-
-    row = cursor.fetchone()
-
-    if row is not None:
-        logging.info('Status: Valid')
-        logging.info('Roles: %s', row['roles'])
-        logging.info('TTL: %d', row['ttl'])
-
-        roles = bytearray()
-
-        for role in row['roles'].split(','):
-            if role == 'SAST':
-                roles.append(ROLE_SAST)
-            elif role == 'CCM':
-                roles.append(ROLE_CCM)
-            elif role == 'CCM+TFTP':
-                roles.append(ROLE_CCM_TFTP)
-            elif role == 'TFTP':
-                roles.append(ROLE_TFTP)
-            elif role == 'CAPF':
-                roles.append(ROLE_CAPF)
-            elif role == 'APP-SERVER':
-                roles.append(ROLE_APP_SERVER)
-            elif role == 'TVS':
-                roles.append(ROLE_TVS)
-
-        ttl = row['ttl']
-
-        send_response(client_socket, COMMAND_VERIFY_RESPONSE, session_id, {
-            ELEMENT_STATUS: STATUS_VALID,
-            ELEMENT_ROLES: roles,
-            ELEMENT_TTL: ttl
-        })
-
-    else:
-        logging.info('Status: Invalid')
-
-        send_response(client_socket, COMMAND_VERIFY_RESPONSE, session_id, {
-            ELEMENT_STATUS: STATUS_INVALID
-        })
-
-
-def handle_client(client_socket):
-    try:
-        command, session_id, elements = receive_request(client_socket, None)
-
-        if command != COMMAND_VERIFY_REQUEST:
-            raise ProgramError(f'Unexpected command: {command}')
-
-        global database_file
-
-        with sqlite3.connect(database_file) as database:
-            database.row_factory = sqlite3.Row
-            verify_certificate(client_socket, session_id, elements, database)
-
-    except (ProgramError, sqlite3.Error) as error:
-        logging.info('Error: %s', error)
-
-    except Exception:
-        logging.error('%s', traceback.format_exc())
-
-    client_socket.close()
-
-
-def start_server(port, timeout, tvs_certificate_file):
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-
-    try:
-        ssl_context.load_cert_chain(tvs_certificate_file)
-    except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
-        raise ProgramError(f'{error.strerror}: {error.filename}')
-
-    ssl_context.verify_mode = ssl.CERT_NONE
-
-    try:
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.settimeout(timeout)
-
-        server_socket = ssl_context.wrap_socket(server_socket, server_side = True)
-
-        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, True)
-        server_socket.bind(('0.0.0.0', port))
-
-        server_socket.listen(5)
-
-    except ssl.SSLError as error:
-        raise ProgramError(error.reason)
-
-    except OSError as error:
-        raise ProgramError(error)
-
-    logging.info('Listening Port: %d', port)
-
-    poll = select.poll()
-    poll.register(server_socket.fileno(), select.POLLIN)
-
-    for signum in signal.SIGINT, signal.SIGQUIT, signal.SIGTERM:
-        signal.signal(signum, stop_server)
-
-    try:
-        while True:
-            events = poll.poll(60)
-
-            for fileno, event in events:
-                if fileno != server_socket.fileno() or not event & select.POLLIN:
-                    continue
-
-                try:
-                    client_socket, unused = server_socket.accept()
-
-                except OSError as error:
-                    logging.error('%s', str(error))
-                    continue
-
-                ip_address, port = client_socket.getpeername()
-
-                thread = threading.Thread(daemon = True, name = f'{ip_address}:{port}', target = handle_client, args = (client_socket,))
-                thread.start()
-
-    except InterruptedError:
-        pass
-
-    server_socket.close()
-
-
-def stop_server(signum, frame):
-    raise InterruptedError
+            logging.info('Status: Invalid')
+            self.send_response(COMMAND_VERIFY_RESPONSE, {ELEMENT_STATUS: STATUS_INVALID})
 
 
 def main():
@@ -324,8 +327,8 @@ def main():
         except getopt.GetoptError as error:
             raise ProgramError(error.msg[0].upper() + error.msg[1:])
 
-        global database_file, default_ttl
-
+        database_file = None
+        default_ttl = 86400
         port = 2445
         timeout = 10
         tvs_certificate_file = None
@@ -373,11 +376,11 @@ def main():
             print('Usage: ' + os.path.basename(sys.argv[0]) + ' [OPTIONS] DATABASE-FILE\n'
                   'Query the validity of a certificate using a TVS server.\n'
                   '\n'
-                  '  -T, --tvs TVS-CERT-FILE         TVS server certificate\n'
-                  '  -p, --port PORT                 port TVS server is listening on (default 2445)\n'
-                  '  -t, --timeout TIMEOUT           connection timeout in seconds (default 10)\n'
-                  '  -L, --ttl LIFETIME              default response validity lifetime\n'
-                  '  -H, --help                      print this help and exit\n'
+                  '  -T, --tvs TVS-CERT-FILE    TVS server certificate\n'
+                  '  -p, --port PORT            port TVS server is listening on (default 2445)\n'
+                  '  -t, --timeout TIMEOUT      connection timeout in seconds (default 10)\n'
+                  '  -L, --ttl LIFETIME         default response validity lifetime\n'
+                  '  -H, --help                 print this help and exit\n'
                   '\n'
                   'DATABASE-FILE can be created and managed using the tvsctl program.\n')
 
@@ -391,7 +394,11 @@ def main():
         if tvs_certificate_file is None:
             raise ProgramError('No TVS certificate file specified')
 
-        start_server(port, timeout, tvs_certificate_file)
+        TvsConnection.database_file = database_file
+        TvsConnection.default_ttl = default_ttl
+
+        tvs_server = TvsServer(port, timeout, tvs_certificate_file)
+        tvs_server.run()
 
     except ProgramError as error:
         logging.error('%s', str(error))
