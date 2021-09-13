@@ -101,7 +101,7 @@ def list_devices(database):
             print('Serial Number:    ', row['serial_number'])
             print('Certificate:      ', len(row['certificate']), 'bytes')
             print('Not Valid Before: ', row['not_valid_before'])
-            print('Not Valid After   ', row['not_valid_after'])
+            print('Not Valid After:  ', row['not_valid_after'])
 
         print('')
 
