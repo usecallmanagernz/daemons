@@ -2,7 +2,7 @@
 
 _capfc_completion() {
     if [[ ${2:0:1} = - ]]; then
-        COMPREPLY=($(compgen -W "-A --capf -h --host -t --timeout -c --certificate -p --password -H --help" -- "$2"))
+        COMPREPLY=($(compgen -W "--capf --host --timeout --certificate --password --help" -- "$2"))
     else
         COMPREPLY=($(compgen -f -- "$2"))
     fi
@@ -14,9 +14,8 @@ complete -F _capfc_completion capfc
 
 _capfctl_completion() {
     if [[ ${2:0:1} = - ]]; then
-        COMPREPLY=($(compgen -W "-l --list -s --set -d --delete -e --export \
-                                 -o --operation -S --keysize -p --password -H --help" -- "$2"))
-    elif [[ $3 = -o || $3 == --operation ]]; then
+        COMPREPLY=($(compgen -W "--list --set --delete --export --operation --keysize --password --help" -- "$2"))
+    elif [[ $3 = --operation ]]; then
         COMPREPLY=($(compgen -W "install fetch delete none" -- "$2"))
     else
         COMPREPLY=($(compgen -f -- "$2"))
@@ -29,7 +28,7 @@ complete -F _capfctl_completion capfctl
 
 _capfd_completion() {
     if [[ ${2:0:1} = - ]]; then
-        COMPREPLY=($(compgen -W "-A --capf -i --issuer -p --port -t --timeout -d --days -H --help" -- "$2"))
+        COMPREPLY=($(compgen -W "--capf --issuer --port --timeout --days --help" -- "$2"))
     else
         COMPREPLY=($(compgen -f -- "$2"))
     fi
@@ -41,7 +40,7 @@ complete -F _capfd_completion capfd
 
 _tvsc_completion() {
     if [[ ${2:0:1} = - ]]; then
-        COMPREPLY=($(compgen -W "-T --tvs -h --host -t --timeout -d --device -H --help" -- "$2"))
+        COMPREPLY=($(compgen -W "--tvs --host --timeout --device --help" -- "$2"))
     else
         COMPREPLY=($(compgen -f -- "$2"))
     fi
@@ -53,8 +52,8 @@ complete -F _tvsc_completion tvsc
 
 _tvsctl_completion() {
     if [[ ${2:0:1} = - ]]; then
-        COMPREPLY=($(compgen -W "-i --insert -l --list -d --delete -e --export -s --sast -c -ccm -t --tftp \
-                                 -C --ccm-tftp -A --capf -a --app-server -T --tvs -L --ttl -H --help" -- "$2"))
+        COMPREPLY=($(compgen -W "--insert --list --delete --export --sast --ccm --tftp \
+                                 --ccm-tftp --capf --app-server --tvs --ttl --help" -- "$2"))
     else
         COMPREPLY=($(compgen -f -- "$2"))
     fi
@@ -66,7 +65,7 @@ complete -F _tvsctl_completion tvsctl
 
 _tvsd_completion() {
     if [[ ${2:0:1} = - ]]; then
-        COMPREPLY=($(compgen -W "-T --tvs -p --port -t --timeout -L --ttl -H --help" -- "$2"))
+        COMPREPLY=($(compgen -W "--tvs --port --timeout --ttl --help" -- "$2"))
     else
         COMPREPLY=($(compgen -f -- "$2"))
     fi
