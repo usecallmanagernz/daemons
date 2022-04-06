@@ -402,7 +402,7 @@ class CapfConnection:
         if public_key is None:
             reason = elements.get(ELEMENT_REASON, -1)
 
-            logging.info('Error: Key generation failed %d', reason)
+            logging.info('Error: Key generation failed (%d)', reason)
             self.send_request(COMMAND_END_SESSION, {ELEMENT_REASON: REASON_INVALID_ELEMENT})
 
             return
@@ -503,7 +503,7 @@ class CapfConnection:
         reason = elements.get(ELEMENT_REASON, -1)
 
         if reason != REASON_UPDATE_CERTIFICATE:
-            logging.info('Error: Failed to store certificate %d', reason)
+            logging.info('Error: Failed to store certificate (%d)', reason)
 
         self.send_request(COMMAND_END_SESSION, {ELEMENT_REASON: REASON_UPDATE_CERTIFICATE})
 
@@ -517,7 +517,7 @@ class CapfConnection:
         reason = elements.get(ELEMENT_REASON, -1)
 
         if reason != REASON_UPDATE_CERTIFICATE:
-            logging.info('Error: Fetch certificate failed %d', reason)
+            logging.info('Error: Fetch certificate failed (%d)', reason)
         else:
             certificate = elements.get(ELEMENT_CERTIFICATE, None)
 
@@ -567,7 +567,7 @@ class CapfConnection:
         reason = elements.get(ELEMENT_REASON, -1)
 
         if reason != REASON_UPDATE_CERTIFICATE:
-            logging.info('Error: Deleted certificate failed {reason}')
+            logging.info('Error: Deleted certificate failed (%d)', reason)
         else:
             cursor = database.cursor()
 
