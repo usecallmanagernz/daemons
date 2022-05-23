@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 #
 # Copyright (c) 2021 Gareth Palmer <gareth.palmer3@gmail.com>
 # This program is free software, distributed under the terms of
@@ -218,7 +218,7 @@ class CapfConnection:
                 database.row_factory = sqlite3.Row
                 cursor = database.cursor()
 
-                cursor.execute('SELECT operation, key_size, password FROM devices WHERE device_name = ?',
+                cursor.execute('SELECT operation, password, key_size, curve FROM devices WHERE device_name = ?',
                                (device_name,))
 
                 row = cursor.fetchone()
@@ -233,18 +233,18 @@ class CapfConnection:
                     self.send_request(COMMAND_END_SESSION, {ELEMENT_REASON: REASON_INVALID_ELEMENT})
 
                 else:
-                    logging.info('Operation: %s', row['operation'])
+                    logging.info('Scheduled Operation: %s', row['operation'])
 
-                    if row['operation'] == 'INSTALL':
-                        self.install_certificate(device_name, row['key_size'], database)
+                    if row['operation'] == 'install':
+                        self.install_certificate(device_name, row['key_size'], row['curve'], database)
 
-                    elif row['operation'] == 'FETCH':
+                    elif row['operation'] == 'fetch':
                         self.fetch_certificate(device_name, database)
 
-                    elif row['operation'] == 'DELETE':
+                    elif row['operation'] == 'delete':
                         self.delete_certificate(device_name, database)
 
-                    elif row['operation'] == 'NONE':
+                    elif row['operation'] == 'none':
                         self.send_request(COMMAND_END_SESSION, {ELEMENT_REASON: REASON_NO_ACTION})
 
         except (ProgramError, sqlite3.Error) as error:
@@ -288,6 +288,10 @@ class CapfConnection:
             elif tag == ELEMENT_KEY_TYPE:
                 key_type = value
                 request += struct.pack('> B H B', ELEMENT_KEY_TYPE, 1, key_type)
+
+            elif tag == ELEMENT_EC_CURVE:
+                ec_curve = value
+                request += struct.pack('> B H B', ELEMENT_EC_CURVE, 1, ec_curve)
 
             else:
                 raise ProgramError(f'Unknown element tag: {tag}')
@@ -381,16 +385,37 @@ class CapfConnection:
 
         return command, elements
 
-    def install_certificate(self, device_name, key_size, database):
-        self.send_request(COMMAND_KEY_GEN_REQUEST, {
-            ELEMENT_KEY_SIZE: key_size,
-            ELEMENT_KEY_TYPE: KEY_TYPE_RSA
-        })
+    def install_certificate(self, device_name, key_size, curve, database):
+        if key_size:
+            logging.info('Key Algorithm: RSA')
+            logging.info('Key Size %d', key_size)
 
-        command, elements = self.receive_response()
+            self.send_request(COMMAND_KEY_GEN_REQUEST, {
+                ELEMENT_KEY_TYPE: KEY_TYPE_RSA,
+                ELEMENT_KEY_SIZE: key_size
+            })
 
-        if command != COMMAND_REQUEST_IN_PROGRESS:
-            raise ProgramError(f'Unexpected command: {command}')
+            command, elements = self.receive_response()
+
+            # Only occurs when generating an RSA key
+            if command != COMMAND_REQUEST_IN_PROGRESS:
+                raise ProgramError(f'Unexpected command: {command}')
+
+        elif curve:
+            logging.info('Key Algorithm: EC')
+            logging.info('Curve: %s', curve)
+
+            if curve == 'secp256k1':
+                ec_curve = EC_CURVE_SECP256K1
+            elif curve == 'secp384p1':
+                ec_curve = EC_CURVE_SECP384P1
+            elif key_size == 'secp521r1':
+                ec_curve = EC_CURVE_SECP521R1
+
+            self.send_request(COMMAND_KEY_GEN_REQUEST, {
+                ELEMENT_KEY_TYPE: KEY_TYPE_EC,
+                ELEMENT_EC_CURVE: ec_curve
+            })
 
         command, elements = self.receive_response()
 
@@ -406,8 +431,6 @@ class CapfConnection:
             self.send_request(COMMAND_END_SESSION, {ELEMENT_REASON: REASON_INVALID_ELEMENT})
 
             return
-
-        logging.info('Key Size: %s', key_size)
 
         try:
             with open(CapfConnection.issuer_certificate_file, 'rb') as file:
@@ -472,7 +495,7 @@ class CapfConnection:
 
         cursor.execute('UPDATE devices SET operation = ?, serial_number = ?, certificate = ?, not_valid_before = ?, not_valid_after = ? '
                        'WHERE device_name = ?',
-                       ('NONE',
+                       ('none',
                         binascii.hexlify(serial_number.to_bytes((serial_number.bit_length() + 7) // 8, byteorder = 'big')).decode('utf-8'),
                         certificate.public_bytes(serialization.Encoding.PEM),
                         not_valid_before.strftime('%Y-%m-%d %H:%M:%S'),
@@ -537,7 +560,7 @@ class CapfConnection:
 
             cursor.execute('UPDATE devices SET operation = ?, serial_number = ?, certificate = ?, not_valid_before = ?, not_valid_after = ? '
                            'WHERE device_name = ?',
-                           ('NONE',
+                           ('none',
                             binascii.hexlify(serial_number.to_bytes((serial_number.bit_length() + 7) // 8, byteorder = 'big')).decode('utf-8'),
                             certificate.public_bytes(serialization.Encoding.PEM),
                             not_valid_before.strftime('%Y-%m-%d %H:%M:%S'),
@@ -573,7 +596,7 @@ class CapfConnection:
 
             cursor.execute('UPDATE devices SET operation = ?, serial_number = NULL, certificate = NULL, not_valid_before = NULL, not_valid_after = NULL '
                            'WHERE device_name = ?',
-                           ('NONE',
+                           ('none',
                             device_name))
 
             database.commit()

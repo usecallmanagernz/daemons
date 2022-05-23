@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 _capfc_completion() {
     if [[ ${2:0:1} = - ]]; then

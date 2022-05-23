@@ -7,7 +7,7 @@ After=network.target
 
 [Service]
 User=tvs
-ExecStart=/usr/local/sbin/tvsd /var/lib/tvs/tvs.sqlite3 -T /var/lib/tvs/tvs.pem
+ExecStart=/usr/local/sbin/tvsd /var/lib/tvs/tvs.sqlite3 --tvs /var/lib/tvs/tvs.pem
 
 [Install]
 WantedBy=multi-user.target

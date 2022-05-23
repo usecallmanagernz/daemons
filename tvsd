@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 import sys
 import os.path
@@ -128,7 +128,6 @@ class TvsServer:
 
 class TvsConnection:
     database_file = None
-    default_ttl = 86400
 
     def __init__(self, client_socket):
         self.client_socket = client_socket
@@ -276,8 +275,8 @@ class TvsConnection:
 
         cursor = database.cursor()
 
-        cursor.execute('SELECT roles, coalesce(ttl, ?) AS ttl FROM certificates WHERE certificate_hash = ?',
-                       (TvsConnection.default_ttl, certificate_hash))
+        cursor.execute('SELECT roles, ttl FROM certificates WHERE certificate_hash = ?',
+                       (certificate_hash,))
 
         row = cursor.fetchone()
 
@@ -319,8 +318,8 @@ class TvsConnection:
 
 def main():
     try:
-        short_options = 'p:t:T:L:H'
-        long_options = ['port=', 'timeout=', 'tvs=', 'ttl=', 'help']
+        short_options = 'p:t:T:H'
+        long_options = ['port=', 'timeout=', 'tvs=', 'help']
 
         try:
             options, arguments = getopt.gnu_getopt(sys.argv[1:], short_options, long_options)
@@ -328,7 +327,6 @@ def main():
             raise ProgramError(error.msg[0].upper() + error.msg[1:])
 
         database_file = None
-        default_ttl = 86400
         port = 2445
         timeout = 10
         tvs_certificate_file = None
@@ -355,17 +353,6 @@ def main():
                 except ValueError:
                     raise ProgramError(f'Invalid timeout: {timeout}')
 
-            elif option in ('-L', '--ttl'):
-                default_ttl = argument
-
-                try:
-                    default_ttl = int(default_ttl)
-                except ValueError:
-                    raise ProgramError(f'Invalid default TTL: {default_ttl}')
-
-                if default_ttl < 1 or default_ttl > 2592000:
-                    raise ProgramError(f'TTL must be between 1 and 2592000')
-
             elif option in ('-T', '--tvs'):
                 tvs_certificate_file = argument
 
@@ -379,7 +366,6 @@ def main():
                   '  -T, --tvs TVS-CERT-FILE    TVS server certificate\n'
                   '  -p, --port PORT            port TVS server is listening on (default 2445)\n'
                   '  -t, --timeout TIMEOUT      connection timeout in seconds (default 10)\n'
-                  '  -L, --ttl LIFETIME         default response validity lifetime\n'
                   '  -H, --help                 print this help and exit\n'
                   '\n'
                   'DATABASE-FILE can be created and managed using the tvsctl program.\n')
@@ -395,7 +381,6 @@ def main():
             raise ProgramError('No TVS certificate file specified')
 
         TvsConnection.database_file = database_file
-        TvsConnection.default_ttl = default_ttl
 
         tvs_server = TvsServer(port, timeout, tvs_certificate_file)
         tvs_server.run()
