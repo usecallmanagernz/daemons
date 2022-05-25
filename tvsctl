@@ -103,8 +103,13 @@ def add_certificate(database, certificate_file, roles, ttl):
     cursor.execute('INSERT INTO certificates (certificate_hash, serial_number, subject_name, issuer_name, certificate, roles, ttl) '
                    'VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (certificate_hash) '
                    'DO UPDATE SET roles = excluded.roles, ttl = excluded.ttl',
-                   (certificate_hash, serial_number, subject_name, issuer_name,
-                    certificate.public_bytes(serialization.Encoding.PEM), roles, ttl))
+                   (certificate_hash,
+                    serial_number,
+                    subject_name,
+                    issuer_name,
+                    certificate.public_bytes(serialization.Encoding.PEM),
+                    roles,
+                    ttl))
 
     database.commit()
 

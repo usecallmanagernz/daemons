@@ -42,7 +42,11 @@ def set_device_operation(database, device_name, operation, password, key_size, c
                    'VALUES (?, ?, ?, ?, ?) ON CONFLICT (device_name) '
                    'DO UPDATE SET operation = excluded.operation, password = excluded.password, '
                    'key_size = excluded.key_size, curve = excluded.curve',
-                   (device_name, operation, password, key_size, curve))
+                   (device_name,
+                    operation,
+                    password,
+                    key_size,
+                    curve))
 
     database.commit()
 
