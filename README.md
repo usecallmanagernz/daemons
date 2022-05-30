@@ -44,19 +44,19 @@ sudo cp bash_completion \
     /etc/bash_completion.d/usecallmanagernz-daemons
 ```
 
-### Add Certificates to Database sing tvsctl
+### Add Certificates to Database using tvsctl
 
 See https://usecallmanager.nz/trust-verification.html#tvsctl
 
 ```
 sudo -u tvs /usr/local/bin/tvsctl /var/lib/tvs/tvs.sqlite3 \
-    -i /etc/ssl/private/sast.pem -s
+    -a /etc/ssl/private/sast.pem -s
 
 sudo -u tvs /usr/local/bin/tvsctl /var/lib/tvs/tvs.sqlite3 \
-    -i /etc/asterisk/keys/asterisk.pem -c
+    -a /etc/asterisk/keys/asterisk.pem -c
 
 sudo -u tvs /usr/local/bin/tvsctl /var/lib/tvs/tvs.sqlite3 \
-    -i /etc/apache2/ssl-certs/apache.pem -a
+    -a /etc/apache2/ssl-certs/apache.pem -A
 
 ...
 ```
@@ -100,16 +100,16 @@ sudo cp bash_completion \
     /etc/bash_completion.d/usecallmanagernz-daemons
 ```
 
-### Add Devices to Database Using capfctl
+### Add Devices to Database using capfctl
 
 See https://usecallmanager.nz/certificate-enrollment.html#capfctl
 
 ```
 sudo -u capf /usr/local/bin/capfctl /var/lib/capf/capf.sqlite3 \
-  -s SEP58971ECC97C1 -o INSTALL
+  -i SEP58971ECC97C1 -p 123456
 
 sudo -u capf /usr/local/bin/capfctl /var/lib/capf/capf.sqlite3 \
-  -s SEP58971ECD8532 -o INSTALL
+  -i SEP58971ECD8532
 
 ...
 ```
