@@ -113,7 +113,7 @@ def add_certificate(database, certificate_file, roles, ttl):
 
     database.commit()
 
-    print('Added', subject_name, 'with', roles, 'as', certificate_hash)
+    print('Added', certificate_hash, '(' + subject_name + ')', 'with', roles)
 
 
 def remove_certificate(database, certificate_hash):
@@ -126,7 +126,7 @@ def remove_certificate(database, certificate_hash):
     row = cursor.fetchone()
 
     if row is None:
-        print(f'No certificate hash matching: {certificate_hash}')
+        print(f'No certificate matching: {certificate_hash}')
         return
 
     cursor.execute('DELETE FROM certificates WHERE certificate_hash = ?',
@@ -134,7 +134,7 @@ def remove_certificate(database, certificate_hash):
 
     database.commit()
 
-    print('Removed',  row['subject_name'], 'with', row['roles'])
+    print('Removed',  row['certificate_hash'], '(' + row['subject_name'] + ')', 'with', row['roles'])
 
 
 def export_certificate(database, certificate_hash):
@@ -146,7 +146,7 @@ def export_certificate(database, certificate_hash):
     row = cursor.fetchone()
 
     if row is None:
-        print(f'No certificate hash matching: {certificate_hash}')
+        print(f'No certificate matching: {certificate_hash}')
         return
 
     print(row['certificate'].decode('utf-8'), end = '')

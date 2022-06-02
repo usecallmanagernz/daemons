@@ -68,7 +68,7 @@ def set_device_operation(database, device_name, operation, password, key_size, c
 def remove_device(database, device_name):
     cursor = database.cursor()
 
-    cursor.execute('SELECT true FROM devices WHERE device_name = ?',
+    cursor.execute('SELECT device_name FROM devices WHERE device_name = ?',
                    (device_name,))
 
     row = cursor.fetchone()
@@ -78,9 +78,9 @@ def remove_device(database, device_name):
         return
 
     cursor.execute('DELETE FROM devices WHERE device_name = ?',
-                   (device_name,))
+                   (row['device_name'],))
 
-    print('Removed', device_name)
+    print('Removed', row['device_name'])
 
 
 def export_certificate(database, device_name):
@@ -217,10 +217,10 @@ def main():
                   'Manage the certificate database for CAPF.\n'
                   '\n'
                   '  -l, --list                     list devices\n'
-                  '  -i, --install DEVICE-NAME      install new certificate on device\n'
-                  '  -f, --fetch DEVICE-NAME        fetch certificate from device\n'
-                  '  -u, --remove DEVICE-NAME       delete certificate from device\n'
-                  '  -n, --none DEVICE-NAME         make no change to certificate on device\n'
+                  '  -i, --install DEVICE-NAME      schedule install new certificate on device\n'
+                  '  -f, --fetch DEVICE-NAME        schedule fetch certificate from device\n'
+                  '  -d, --delete DEVICE-NAME       schedule delete certificate from device\n'
+                  '  -n, --none DEVICE-NAME         no scheduled change to certificate on device\n'
                   '  -p, --password PASSWORD        authentication password\n'
                   '  -b, --bits, --key-size BITS    RSA key-size: 512, 1024, 2048, 3072 or 4096 (default 2048)\n'
                   '  -E, --curve CURVE              EC algorithm: secp256k1, secp384p1 or secp521r1\n'
