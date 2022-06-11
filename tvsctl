@@ -18,15 +18,6 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, ec
 
 
-ROLE_SAST = 0
-ROLE_CCM = 1
-ROLE_CCM_TFTP = 2
-ROLE_TFTP = 3
-ROLE_CAPF = 4
-ROLE_APP_SERVER = 7
-ROLE_TVS = 21
-
-
 class ProgramError(Exception):
     pass
 
@@ -49,17 +40,6 @@ def initalise_database(database):
     database.commit()
 
     print('Database initialised')
-
-
-role_names = {
-    'SAST': ROLE_SAST,
-    'CCM': ROLE_CCM,
-    'CCM+TFTP': ROLE_CCM_TFTP,
-    'TFTP': ROLE_TFTP,
-    'CAPF': ROLE_CAPF,
-    'APP-SERVER': ROLE_APP_SERVER,
-    'TVS': ROLE_TVS
-}
 
 
 def add_certificate(database, certificate_file, roles, ttl):
@@ -97,7 +77,7 @@ def add_certificate(database, certificate_file, roles, ttl):
     certificate_hash = certificate.fingerprint(hashes.SHA256())
     certificate_hash = binascii.hexlify(certificate_hash).decode('utf-8')
 
-    roles = ','.join(sorted(roles, key = lambda role: role_names[role]))
+    roles = ','.join(sorted(roles, key = lambda role: ('SAST', 'CCM', 'CCM+TFTP', 'TFTP', 'CAPF', 'APP-SERVER', 'TVS').index(role)))
     cursor = database.cursor()
 
     cursor.execute('INSERT INTO certificates (certificate_hash, serial_number, subject_name, issuer_name, certificate, roles, ttl) '
@@ -113,7 +93,7 @@ def add_certificate(database, certificate_file, roles, ttl):
 
     database.commit()
 
-    print('Added', certificate_hash, '(' + subject_name + ')', 'with', roles)
+    print('Added', certificate_hash, '<' + subject_name + '> with', roles)
 
 
 def remove_certificate(database, certificate_hash):
@@ -134,7 +114,7 @@ def remove_certificate(database, certificate_hash):
 
     database.commit()
 
-    print('Removed',  row['certificate_hash'], '(' + row['subject_name'] + ')', 'with', row['roles'])
+    print('Removed',  row['certificate_hash'], '<' + row['subject_name'] + '> with', row['roles'])
 
 
 def export_certificate(database, certificate_hash):
