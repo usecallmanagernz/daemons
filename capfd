@@ -154,16 +154,13 @@ class CapfServer:
 
                     try:
                         client_socket, _ = self.server_socket.accept()
+                        ip_address, port = client_socket.getpeername()
 
                     except OSError as error:
                         logging.error('%s', str(error))
                         continue
 
-                    CapfServer.session_id += 1
-                    session_id = CapfServer.session_id
-
-                    ip_address, port = client_socket.getpeername()
-                    capf_connection = CapfConnection(client_socket, session_id)
+                    capf_connection = CapfConnection(client_socket)
 
                     thread = threading.Thread(daemon = True, name = f'{ip_address}:{port}', target = capf_connection.run)
                     thread.start()
@@ -181,7 +178,10 @@ class CapfConnection:
     issuer_certificate_file = None
     validity_days = 0
 
-    def __init__(self, client_socket, session_id):
+    def __init__(self, client_socket):
+        CapfServer.session_id += 1
+        session_id = CapfServer.session_id
+
         self.client_socket = client_socket
         self.session_id = session_id
 
@@ -233,7 +233,7 @@ class CapfConnection:
                     self.send_request(COMMAND_END_SESSION, {ELEMENT_REASON: REASON_INVALID_ELEMENT})
 
                 else:
-                    logging.info('Scheduled Operation: %s', row['operation'])
+                    logging.info('Scheduled Operation: %s', row['operation'].title())
 
                     if row['operation'] == 'install':
                         self.install_certificate(device_name, row['key_size'], row['curve'], database)
@@ -317,7 +317,15 @@ class CapfConnection:
             raise ProgramError(f'Mismatched session ID: {session_id}')
 
         while len(response) < (length + 8):
-            response += self.client_socket.recv((length + 8) - len(response))
+            content = self.client_socket.recv((length + 8) - len(response))
+
+            if not len(content):
+                break
+
+            response += content
+
+        if len(response) != (length + 8):
+            raise ProgramError(f'Invalid response length: {length}')
 
         elements = {}
         index = 8

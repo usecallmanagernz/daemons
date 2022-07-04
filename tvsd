@@ -108,12 +108,12 @@ class TvsServer:
 
                     try:
                         client_socket, _ = self.server_socket.accept()
+                        ip_address, port = client_socket.getpeername()
 
                     except OSError as error:
                         logging.error('Error: %s', str(error))
                         continue
 
-                    ip_address, port = client_socket.getpeername()
                     tvs_connection = TvsConnection(client_socket)
 
                     thread = threading.Thread(daemon = True, name = f'{ip_address}:{port}', target = tvs_connection.run)
@@ -145,6 +145,7 @@ class TvsConnection:
 
             with sqlite3.connect(TvsConnection.database_file) as database:
                 database.row_factory = sqlite3.Row
+
                 self.verify_certificate(elements, database)
 
         except (ProgramError, sqlite3.Error) as error:
@@ -201,7 +202,15 @@ class TvsConnection:
             raise ProgramError(f'Mismatched session ID: {session_id}')
 
         while len(request) < (length + 10):
-            request += self.client_socket.recv((length + 10) - len(request))
+            content = self.client_socket.recv((length + 10) - len(request))
+
+            if not len(content):
+                break
+
+            request += content
+
+        if len(request) != (length + 10):
+            raise ProgramError(f'Invalid request length: {length}')
 
         elements = {}
         index = 10
