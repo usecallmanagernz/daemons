@@ -89,8 +89,7 @@ class TvsClient:
             self.socket.close()
 
     def send_request(self, command, elements):
-        request = bytearray()
-        request += struct.pack('> B B B B I H', PROTOCOL_ID, PROTOCOL_VERSION, command, 0, self.session_id, 0)
+        request = bytearray(struct.pack('> B B B B I H', PROTOCOL_ID, PROTOCOL_VERSION, command, 0, self.session_id, 0))
 
         for tag, value in elements.items():
             if tag == ELEMENT_DEVICE_NAME:
@@ -110,10 +109,10 @@ class TvsClient:
                 raise ProgramError(f'Unknown element tag: {tag}')
 
         struct.pack_into('> H', request, 8, len(request) - 10)
-        self.socket.send(request)
+        self.socket.sendall(request)
 
     def receive_response(self):
-        response = self.socket.recv(10)
+        response = bytearray(self.socket.recv(10))
 
         if not len(response):
             raise ProgramError('Server closed socket')
@@ -133,7 +132,15 @@ class TvsClient:
             raise ProgramError(f'Mismatched session ID: {session_id}')
 
         while len(response) < (length + 10):
-            response += self.socket.recv((length + 10) - len(response))
+            response_chunk = self.socket.recv((length + 10) - len(response))
+
+            if not len(response_chunk):
+                break
+
+            response += response_chunk
+
+        if len(response) != (length + 10):
+            raise ProgramError('Truncated response')
 
         elements = {}
         index = 10

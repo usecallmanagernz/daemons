@@ -172,7 +172,7 @@ class CapfClient:
                 raise ProgramError(f'Unknown element tag: {tag}')
 
         struct.pack_into('> H', response, 6, len(response) - 8)
-        self.socket.send(response)
+        self.socket.sendall(response)
 
     def receive_request(self):
         request = self.socket.recv(8)
@@ -194,7 +194,15 @@ class CapfClient:
             raise ProgramError(f'Mismatched session ID: {session_id}')
 
         while len(request) < (length + 8):
-            request += self.socket.recv((length + 8) - len(request))
+            request_chunk = self.socket.recv((length + 8) - len(request))
+
+            if not len(request_chunk):
+                break
+
+            request += request_chunk
+
+        if len(request) != (length + 8):
+            raise ProgramError('Truncated request')
 
         elements = {}
         index = 8
