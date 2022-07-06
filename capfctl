@@ -19,7 +19,8 @@ class ProgramError(Exception):
 def setup_database(database):
     cursor = database.cursor()
 
-    cursor.execute('SELECT name FROM sqlite_master WHERE name = ?', ('devices',))
+    cursor.execute('SELECT name FROM sqlite_master WHERE name = ?',
+                   ('devices',))
 
     row = cursor.fetchone()
 
