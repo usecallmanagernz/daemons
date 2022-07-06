@@ -22,7 +22,7 @@ class ProgramError(Exception):
     pass
 
 
-def initalise_database(database):
+def setup_database(database):
     cursor = database.cursor()
 
     cursor.execute('SELECT name FROM sqlite_master WHERE name = ?',
@@ -39,7 +39,7 @@ def initalise_database(database):
 
     database.commit()
 
-    print('Database initialised')
+    print('Setup database')
 
 
 def add_certificate(database, certificate_file, roles, ttl):
@@ -263,7 +263,7 @@ def main():
         with sqlite3.connect(database_file) as database:
             database.row_factory = sqlite3.Row
 
-            initalise_database(database)
+            setup_database(database)
 
             if mode == 'add':
                 if not len(roles):

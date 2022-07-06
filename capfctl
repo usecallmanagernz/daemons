@@ -16,7 +16,7 @@ class ProgramError(Exception):
     pass
 
 
-def initalise_database(database):
+def setup_database(database):
     cursor = database.cursor()
 
     cursor.execute('SELECT name FROM sqlite_master WHERE name = ?', ('devices',))
@@ -32,7 +32,7 @@ def initalise_database(database):
 
     database.commit()
 
-    print('Initialised database')
+    print('Setup database')
 
 
 def set_device_operation(database, device_name, operation, password, key_size, curve):
@@ -68,6 +68,7 @@ def set_device_operation(database, device_name, operation, password, key_size, c
 def remove_device(database, device_name):
     cursor = database.cursor()
 
+    # RETURNING clause only available in sqlite >= 3.35
     cursor.execute('SELECT device_name FROM devices WHERE device_name = ?',
                    (device_name,))
 
@@ -247,7 +248,7 @@ def main():
         with sqlite3.connect(database_file) as database:
             database.row_factory = sqlite3.Row
 
-            initalise_database(database)
+            setup_database(database)
 
             if mode == 'set':
                 set_device_operation(database, device_name, operation, password, key_size, curve)
