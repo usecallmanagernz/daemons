@@ -125,8 +125,7 @@ class CapfClient:
             self.socket.close()
 
     def send_response(self, command, elements):
-        response = bytearray()
-        response += struct.pack('> B B I H', PROTOCOL_ID, command, self.session_id, 0)
+        response = bytearray(struct.pack('> B B I H', PROTOCOL_ID, command, self.session_id, 0))
 
         for tag, value in elements.items():
             if tag == ELEMENT_REASON:
@@ -175,7 +174,7 @@ class CapfClient:
         self.socket.sendall(response)
 
     def receive_request(self):
-        request = self.socket.recv(8)
+        request = bytearray(self.socket.recv(8))
 
         if not len(request):
             raise ProgramError('Server closed socket')

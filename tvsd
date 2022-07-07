@@ -297,19 +297,19 @@ class TvsConnection:
 
             for role in row['roles'].split(','):
                 if role == 'SAST':
-                    roles.append(ROLE_SAST)
+                    roles += struct.pack('B', ROLE_SAST)
                 elif role == 'CCM':
-                    roles.append(ROLE_CCM)
+                    roles += struct.pack('B', ROLE_CCM)
                 elif role == 'CCM+TFTP':
-                    roles.append(ROLE_CCM_TFTP)
+                    roles += struct.pack('B', ROLE_CCM_TFTP)
                 elif role == 'TFTP':
-                    roles.append(ROLE_TFTP)
+                    roles += struct.pack('B', ROLE_TFTP)
                 elif role == 'CAPF':
-                    roles.append(ROLE_CAPF)
+                    roles += struct.pack('B', ROLE_CAPF)
                 elif role == 'APP-SERVER':
-                    roles.append(ROLE_APP_SERVER)
+                    roles += struct.pack('B', ROLE_APP_SERVER)
                 elif role == 'TVS':
-                    roles.append(ROLE_TVS)
+                    roles += struct.pack('B', ROLE_TVS)
 
             ttl = row['ttl']
 
