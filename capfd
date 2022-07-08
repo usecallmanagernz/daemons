@@ -511,14 +511,14 @@ class CapfConnection:
 
         database.commit()
 
-        logging.info('Result: Installed certificate')
-
         try:
             with open(f'{CapfConnection.certificates_dir}/{device_name}.pem', 'wb') as file:
                 file.write(certificate.public_bytes(serialization.Encoding.PEM))
 
         except (PermissionError, IsADirectoryError) as error:
             raise ProgramError(f'{error.strerror}: {error.filename}')
+
+        logging.info('Result: Installed certificate')
 
         self.send_request(COMMAND_STORE_CERT_REQUEST, {
             ELEMENT_CERTIFICATE_TYPE: CERTIFICATE_TYPE_LSC,
@@ -580,10 +580,10 @@ class CapfConnection:
                 with open(f'{CapfConnection.certificates_dir}/{device_name}.pem', 'wb') as file:
                     file.write(certificate.public_bytes(serialization.Encoding.PEM))
 
-                    logging.info('Result: Fetched certificate')
-
             except (PermissionError, IsADirectoryError) as error:
                 raise ProgramError(f'{error.strerror}: {error.filename}')
+
+            logging.info('Result: Fetched certificate')
 
         self.send_request(COMMAND_END_SESSION, {ELEMENT_REASON: REASON_NO_ACTION})
 
@@ -614,7 +614,7 @@ class CapfConnection:
                 except (PermissionError, IsADirectoryError) as error:
                     raise ProgramError(f'{error.strerror}: {error.filename}')
 
-                logging.info('Result: Deleted certificate')
+            logging.info('Result: Deleted certificate')
 
         self.send_request(COMMAND_END_SESSION, {ELEMENT_REASON: REASON_UPDATE_CERTIFICATE})
 
