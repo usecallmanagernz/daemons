@@ -60,7 +60,7 @@ def add_certificate(database, certificate_file, roles, ttl):
     if not isinstance(public_key, (rsa.RSAPublicKey, ec.EllipticCurvePublicKey)):
         raise ProgramError(f'No RSA or EC public-key in file: {certificate_file}')
 
-    serial_number = serial_number = certificate.serial_number
+    serial_number = certificate.serial_number
     serial_number = serial_number.to_bytes((serial_number.bit_length() + 7) // 8, byteorder = 'big')
     serial_number = binascii.hexlify(serial_number).decode('utf-8')
 
