@@ -129,7 +129,7 @@ class CapfServer:
             raise ProgramError(error.reason)
 
         except OSError as error:
-            raise ProgramError(error)
+            raise ProgramError(error.strerror)
 
         logging.info('Listening Port: %d', port)
 
@@ -157,7 +157,7 @@ class CapfServer:
                         ip_address, port = client_socket.getpeername()
 
                     except OSError as error:
-                        logging.error('%s', str(error))
+                        logging.error('%s', error.strerror)
                         continue
 
                     capf_connection = CapfConnection(client_socket)

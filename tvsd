@@ -83,7 +83,7 @@ class TvsServer:
             raise ProgramError(error.reason)
 
         except OSError as error:
-            raise ProgramError(error)
+            raise ProgramError(error.strerror)
 
         logging.info('Listening Port: %d', port)
 
@@ -111,7 +111,7 @@ class TvsServer:
                         ip_address, port = client_socket.getpeername()
 
                     except OSError as error:
-                        logging.error('Error: %s', str(error))
+                        logging.error('Error: %s', error.strerror)
                         continue
 
                     tvs_connection = TvsConnection(client_socket)
