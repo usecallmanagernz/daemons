@@ -316,7 +316,7 @@ class TvsConnection:
             elif role == 'TVS':
                 roles += struct.pack('B', ROLE_TVS)
 
-            ttl = row['ttl']
+        ttl = row['ttl']
 
         self.send_response(COMMAND_VERIFY_RESPONSE, {
             ELEMENT_STATUS: STATUS_VALID,
