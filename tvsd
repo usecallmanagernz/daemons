@@ -288,40 +288,41 @@ class TvsConnection:
 
         row = cursor.fetchone()
 
-        if row is not None:
-            logging.info('Status: Valid')
-            logging.info('Roles: %s', row['roles'])
-            logging.info('TTL: %d', row['ttl'])
+        if row is None:
+            logging.info('Status: Invalid')
+            self.send_response(COMMAND_VERIFY_RESPONSE, {ELEMENT_STATUS: STATUS_INVALID})
 
-            roles = bytearray()
+            return
 
-            for role in row['roles'].split(','):
-                if role == 'SAST':
-                    roles += struct.pack('B', ROLE_SAST)
-                elif role == 'CCM':
-                    roles += struct.pack('B', ROLE_CCM)
-                elif role == 'CCM+TFTP':
-                    roles += struct.pack('B', ROLE_CCM_TFTP)
-                elif role == 'TFTP':
-                    roles += struct.pack('B', ROLE_TFTP)
-                elif role == 'CAPF':
-                    roles += struct.pack('B', ROLE_CAPF)
-                elif role == 'APP-SERVER':
-                    roles += struct.pack('B', ROLE_APP_SERVER)
-                elif role == 'TVS':
-                    roles += struct.pack('B', ROLE_TVS)
+        logging.info('Status: Valid')
+        logging.info('Roles: %s', row['roles'])
+        logging.info('TTL: %d', row['ttl'])
+
+        roles = bytearray()
+
+        for role in row['roles'].split(','):
+            if role == 'SAST':
+                roles += struct.pack('B', ROLE_SAST)
+            elif role == 'CCM':
+                roles += struct.pack('B', ROLE_CCM)
+            elif role == 'CCM+TFTP':
+                roles += struct.pack('B', ROLE_CCM_TFTP)
+            elif role == 'TFTP':
+                roles += struct.pack('B', ROLE_TFTP)
+            elif role == 'CAPF':
+                roles += struct.pack('B', ROLE_CAPF)
+            elif role == 'APP-SERVER':
+                roles += struct.pack('B', ROLE_APP_SERVER)
+            elif role == 'TVS':
+                roles += struct.pack('B', ROLE_TVS)
 
             ttl = row['ttl']
 
-            self.send_response(COMMAND_VERIFY_RESPONSE, {
-                ELEMENT_STATUS: STATUS_VALID,
-                ELEMENT_ROLES: roles,
-                ELEMENT_TTL: ttl
-            })
-
-        else:
-            logging.info('Status: Invalid')
-            self.send_response(COMMAND_VERIFY_RESPONSE, {ELEMENT_STATUS: STATUS_INVALID})
+        self.send_response(COMMAND_VERIFY_RESPONSE, {
+            ELEMENT_STATUS: STATUS_VALID,
+            ELEMENT_ROLES: roles,
+            ELEMENT_TTL: ttl
+        })
 
 
 def main():
@@ -394,7 +395,7 @@ def main():
         tvs_server.run()
 
     except ProgramError as error:
-        logging.error('%s', str(error))
+        logging.error('%s', error)
         exit(1)
 
     except Exception:

@@ -225,27 +225,29 @@ class CapfConnection:
 
                 if row is None:
                     logging.info('Unknown device: %s', device_name)
-
                     self.send_request(COMMAND_END_SESSION, {ELEMENT_REASON: REASON_UNKNOWN_DEVICE})
 
-                elif row['password'] is not None and row['password'] != password:
+                    return
+
+                if row['password'] is not None and row['password'] != password:
                     logging.info('Incorrect password: %s', password)
                     self.send_request(COMMAND_END_SESSION, {ELEMENT_REASON: REASON_INVALID_ELEMENT})
 
-                else:
-                    logging.info('Scheduled Operation: %s', row['operation'].title())
+                    return
 
-                    if row['operation'] == 'install':
-                        self.install_certificate(device_name, row['key_size'], row['curve'], database)
+                logging.info('Scheduled Operation: %s', row['operation'].title())
 
-                    elif row['operation'] == 'fetch':
-                        self.fetch_certificate(device_name, database)
+                if row['operation'] == 'install':
+                    self.install_certificate(device_name, row['key_size'], row['curve'], database)
 
-                    elif row['operation'] == 'delete':
-                        self.delete_certificate(device_name, database)
+                elif row['operation'] == 'fetch':
+                    self.fetch_certificate(device_name, database)
 
-                    elif row['operation'] == 'none':
-                        self.send_request(COMMAND_END_SESSION, {ELEMENT_REASON: REASON_NO_ACTION})
+                elif row['operation'] == 'delete':
+                    self.delete_certificate(device_name, database)
+
+                elif row['operation'] == 'none':
+                    self.send_request(COMMAND_END_SESSION, {ELEMENT_REASON: REASON_NO_ACTION})
 
         except (ProgramError, sqlite3.Error) as error:
             logging.error('Error: %s', error)
@@ -722,7 +724,7 @@ def main():
         capf_server.run()
 
     except ProgramError as error:
-        logging.error('%s', str(error))
+        logging.error('%s', error)
         exit(1)
 
     except Exception:
