@@ -28,7 +28,7 @@ def setup_database(database):
         return
 
     cursor.execute('CREATE TABLE devices (device_name TEXT PRIMARY KEY, operation TEXT NOT NULL, '
-                   'password TEXT, key_size INTEGER, curve TEXT, certificate TEXT, '
+                   'authentication TEXT, password TEXT, key_size INTEGER, curve TEXT, certificate TEXT, '
                    'serial_number TEXT, not_valid_before TEXT, not_valid_after TEXT) WITHOUT ROWID')
 
     database.commit()
@@ -36,14 +36,15 @@ def setup_database(database):
     print('Setup database')
 
 
-def set_device_operation(database, device_name, operation, password, key_size, curve):
+def set_device_operation(database, device_name, operation, authentication, password, key_size, curve):
     cursor = database.cursor()
 
-    cursor.execute('INSERT INTO devices (device_name, operation, password, key_size, curve) '
-                   'VALUES (?, ?, ?, ?, ?) ON CONFLICT (device_name) DO UPDATE '
-                   'SET operation = excluded.operation, password = excluded.password, key_size = excluded.key_size, curve = excluded.curve',
+    cursor.execute('INSERT INTO devices (device_name, operation, authentication, password, key_size, curve) '
+                   'VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (device_name) DO UPDATE '
+                   'SET operation = excluded.operation, authentication = excluded.authentication, password = excluded.password, key_size = excluded.key_size, curve = excluded.curve',
                    (device_name,
                     operation,
+                    authentication,
                     password,
                     key_size,
                     curve))
@@ -52,18 +53,18 @@ def set_device_operation(database, device_name, operation, password, key_size, c
 
     if operation == 'install':
         if key_size:
-            print('Scheduled install on', device_name, 'with RSA', key_size)
+            print('Scheduled install on', device_name, 'with RSA', key_size, 'using', authentication)
         elif curve:
-            print('Scheduled install on', device_name, 'with EC', curve)
+            print('Scheduled install on', device_name, 'with EC', curve, 'using', authentication)
 
     elif operation == 'fetch':
-        print('Scheduled fetch on', device_name)
+        print('Scheduled fetch on', device_name, 'using', authentication)
 
     elif operation == 'delete':
-        print('Scheduled delete on', device_name)
+        print('Scheduled delete on', device_name, 'using', authentication)
 
     elif operation == 'none':
-        print('Scheduled no operation', device_name)
+        print('Scheduled no operation', device_name, 'using', authentication)
 
 
 def remove_device(database, device_name):
@@ -107,7 +108,7 @@ def export_certificate(database, device_name):
 def list_devices(database):
     cursor = database.cursor()
 
-    cursor.execute('SELECT device_name, operation, password, key_size, curve, certificate, serial_number, not_valid_before, not_valid_after '
+    cursor.execute('SELECT device_name, operation, authentication, password, key_size, curve, certificate, serial_number, not_valid_before, not_valid_after '
                    'FROM devices ORDER BY device_name ASC')
 
     rows = cursor.fetchall()
@@ -119,6 +120,7 @@ def list_devices(database):
     for row in rows:
         print('Device Name:        ', row['device_name'])
         print('Scheduled Operation:', row['operation'].title())
+        print('Authentication Mode:', row['authentication'].title())
 
         if row['password']:
             print('Password:           ', row['password'])
@@ -141,8 +143,8 @@ def list_devices(database):
 
 def main():
     try:
-        short_options = 'i:f:d:n:p:b:E:r:e:lH'
-        long_options = ['install=', 'fetch=', 'delete=', 'none=', 'password=', 'bits=', 'key-size=', 'curve=', 'remove=', 'export=', 'list', 'help']
+        short_options = 'i:f:d:n:p:c:b:E:r:e:lH'
+        long_options = ['install=', 'fetch=', 'delete=', 'none=', 'password=', 'certificate', 'bits=', 'key-size=', 'curve=', 'remove=', 'export=', 'list', 'help']
 
         try:
             options, arguments = getopt.gnu_getopt(sys.argv[1:], short_options, long_options)
@@ -152,9 +154,11 @@ def main():
         mode = None
         device_name = None
         operation = None
+        authentication = 'no password'
+        password = None
         key_size = 2048
         curve = None
-        password = None
+
         help = False
 
         for option, argument in options:
@@ -175,10 +179,13 @@ def main():
                 device_name = argument
 
             elif option in ('-p', '--password'):
-                password = argument
+                authentication, password = 'password', argument
 
                 if len(password) < 4 or len(password) > 15:
                     raise ProgramError('Invalid password length')
+
+            elif option in ('-c', '--certificate'):
+                authentication = 'certificate'
 
             elif option in ('-b', '--bits', '--key-size'):
                 key_size = argument
@@ -223,7 +230,8 @@ def main():
                   '  -f, --fetch DEVICE-NAME        schedule fetch certificate from device\n'
                   '  -d, --delete DEVICE-NAME       schedule delete certificate from device\n'
                   '  -n, --none DEVICE-NAME         no scheduled change to certificate on device\n'
-                  '  -p, --password PASSWORD        authentication password\n'
+                  '  -p, --password PASSWORD        authenticate using password\n'
+                  '  -c, --certificate              authenticate using installed certificate\n'
                   '  -b, --bits, --key-size BITS    RSA key-size: 512, 1024, 2048, 3072 or 4096 (default 2048)\n'
                   '  -E, --curve CURVE              EC algorithm: secp256k1, secp384p1 or secp521r1\n'
                   '  -r, --remove DEVICE-NAME       remove device from database\n'
@@ -252,7 +260,7 @@ def main():
             setup_database(database)
 
             if mode == 'set':
-                set_device_operation(database, device_name, operation, password, key_size, curve)
+                set_device_operation(database, device_name, operation, authentication, password, key_size, curve)
 
             elif mode == 'remove':
                 remove_device(database, device_name)

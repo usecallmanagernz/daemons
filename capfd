@@ -21,9 +21,11 @@ import binascii
 import sqlite3
 
 from cryptography import x509
+from cryptography.exceptions import InvalidSignature
 from cryptography.x509 import oid
 from cryptography.hazmat import backends
 from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa, ec
 
 
 PROTOCOL_ID = 85
@@ -63,14 +65,14 @@ ELEMENT_VERSION = 7
 ELEMENT_AUTH_TYPE = 8
 ELEMENT_PUBLIC_KEY = 9
 ELEMENT_KEY_SIZE = 10
-ELEMENT_AUTH_PASSWORD = 11
+ELEMENT_PASSWORD = 11
 ELEMENT_RETRY_DELAY = 12
 ELEMENT_DEVICE_NAME = 13
 ELEMENT_SUDI_DATA = 16
 ELEMENT_KEY_TYPE = 17
 ELEMENT_EC_CURVE = 18
 ELEMENT_DIGEST_TYPE = 19
-ELEMENT_SIGNED_DATA_SHA2 = 20
+ELEMENT_SHA2_SIGNED_DATA = 20
 
 REASON_NO_ACTION = 0
 REASON_UPDATE_CERTIFICATE = 1
@@ -79,6 +81,13 @@ REASON_UNKNOWN_DEVICE = 9
 
 AUTH_TYPE_NONE = 0
 AUTH_TYPE_PASSWORD = 1
+AUTH_TYPE_NO_PASSWORD = 2
+AUTH_TYPE_LSC = 3
+AUTH_TYPE_MIC = 4
+
+HASH_SHA1 = 1
+HASH_SHA256 = 2
+HASH_SHA512 = 3
 
 CERTIFICATE_TYPE_LSC = 1
 CERTIFICATE_TYPE_MIC = 2
@@ -176,6 +185,7 @@ class CapfConnection:
     database_file = None
     certificates_dir = None
     issuer_certificate_file = None
+    verify_certificate_files = []
     validity_days = 0
 
     def __init__(self, client_socket):
@@ -212,13 +222,11 @@ class CapfConnection:
 
             logging.info('Device Name: %s', device_name)
 
-            password = elements.get(ELEMENT_AUTH_PASSWORD, None)
-
             with sqlite3.connect(CapfConnection.database_file) as database:
                 database.row_factory = sqlite3.Row
                 cursor = database.cursor()
 
-                cursor.execute('SELECT operation, password, key_size, curve FROM devices WHERE device_name = ?',
+                cursor.execute('SELECT operation, authentication, password, key_size, curve FROM devices WHERE device_name = ?',
                                (device_name,))
 
                 row = cursor.fetchone()
@@ -229,11 +237,22 @@ class CapfConnection:
 
                     return
 
-                if row['password'] is not None and row['password'] != password:
-                    logging.info('Incorrect password: %s', password)
-                    self.send_request(COMMAND_END_SESSION, {ELEMENT_REASON: REASON_INVALID_ELEMENT})
+                logging.info('Authentication Mode: %s', row['authentication'].title())
 
-                    return
+                if row['authentication'] == 'password':
+                    password = elements.get(ELEMENT_PASSWORD, None)
+
+                    if row['password'] != password:
+                        raise ProgramError(f'Incorrect password')
+
+                elif row['authentication'] == 'certificate':
+                    certificate = elements.get(ELEMENT_CERTIFICATE, None)
+                    signed_data = elements.get(ELEMENT_SIGNED_DATA, None)
+                    sha2_signed_data = elements.get(ELEMENT_SHA2_SIGNED_DATA, None)
+                    sudi_data = elements.get(ELEMENT_SUDI_DATA, None)
+
+                    self.verify_signed_data(device_name, certificate, signed_data, sha2_signed_data)
+                    self.verify_sudi_data(sudi_data)
 
                 logging.info('Scheduled Operation: %s', row['operation'].title())
 
@@ -251,6 +270,7 @@ class CapfConnection:
 
         except (ProgramError, sqlite3.Error) as error:
             logging.error('Error: %s', error)
+            self.send_request(COMMAND_END_SESSION, {ELEMENT_REASON: REASON_INVALID_ELEMENT})
 
         except Exception:
             logging.error('%s', traceback.format_exc())
@@ -351,23 +371,23 @@ class CapfConnection:
 
             elif tag == ELEMENT_CERTIFICATE:
                 certificate = response[index:index + length]
-                certificate = certificate[5:]
+                certificate = bytes(certificate[5:])
 
                 elements[ELEMENT_CERTIFICATE] = certificate
 
             elif tag == ELEMENT_SIGNED_DATA:
                 signed_data = response[index:index + length]
-                elements[ELEMENT_SIGNED_DATA] = signed_data
+                elements[ELEMENT_SIGNED_DATA] = bytes(signed_data)
 
             elif tag == ELEMENT_VERSION:
                 version = response[index]
                 elements[ELEMENT_VERSION] = version
 
-            elif tag == ELEMENT_AUTH_PASSWORD:
+            elif tag == ELEMENT_PASSWORD:
                 password = response[index:index + length]
                 password = password[:-1].decode('utf-8')
 
-                elements[ELEMENT_AUTH_PASSWORD] = password
+                elements[ELEMENT_PASSWORD] = password
 
             elif tag == ELEMENT_DEVICE_NAME:
                 device_name = response[index:index + length]
@@ -377,22 +397,223 @@ class CapfConnection:
 
             elif tag == ELEMENT_PUBLIC_KEY:
                 public_key = response[index:index + length]
-                elements[ELEMENT_PUBLIC_KEY] = public_key
+                elements[ELEMENT_PUBLIC_KEY] = bytes(public_key)
 
             elif tag == ELEMENT_SUDI_DATA:
                 sudi_data = response[index:index + length]
-                elements[ELEMENT_SUDI_DATA] = sudi_data
+                elements[ELEMENT_SUDI_DATA] = bytes(sudi_data)
 
-            elif tag == ELEMENT_SIGNED_DATA_SHA2:
-                signed_data_sha2 = response[index:index + length]
-                elements[ELEMENT_SIGNED_DATA_SHA2] = signed_data_sha2
+            elif tag == ELEMENT_SHA2_SIGNED_DATA:
+                sha2_signed_data = response[index:index + length]
+                elements[ELEMENT_SHA2_SIGNED_DATA] = bytes(sha2_signed_data)
 
             else:
-                raise ProgramError(f'Unknown ELEMENT tag: {tag}')
+                raise ProgramError(f'Unknown element tag: {tag}')
 
             index += length
 
         return command, elements
+
+    def verify_certificate(self, certificate, type):
+        if certificate is None:
+            raise ProgramError('No certificate')
+
+        logging.info('%s Subject Name: %s', type, certificate.subject.rfc4514_string())
+
+        for verify_certificate_file in [CapfConnection.issuer_certificate_file] + CapfConnection.verify_certificate_files:
+            try:
+                with open(verify_certificate_file, 'rb') as file:
+                    verify_certificate = file.read()
+
+            except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
+                raise ProgramError(f'{error.strerror}: {error.filename}')
+
+            try:
+                verify_certificate = x509.load_pem_x509_certificate(verify_certificate, backends.default_backend())
+            except ValueError:
+                raise ProgramError('Invalid verify certificate')
+
+            if certificate.issuer != verify_certificate.subject:
+                continue
+
+            public_key = verify_certificate.public_key()
+
+            try:
+                if isinstance(public_key, rsa.RSAPublicKey):
+                    public_key.verify(certificate.signature, certificate.tbs_certificate_bytes, padding.PKCS1v15(), certificate.signature_hash_algorithm)
+
+                elif isinstance(public_key, ec.EllipticCurvePublicKey):
+                    public_key.verify(certificate.signature, certificate.tbs_certificate_bytes, ec.ECDSA(certificate.signature_hash_algorithm))
+
+            except InvalidSignature:
+                continue
+
+            logging.info('%s Issuer Name: %s', type, verify_certificate.subject.rfc4514_string())
+            break
+
+        else:
+            raise ProgramError(f'Unknown certificate issuer')
+
+    def verify_signed_data(self, device_name, certificate, signed_data, sha2_signed_data):
+        if certificate is None:
+            raise ProgramError('No certificate')
+
+        if signed_data is None:
+            raise ProgramError('No signed-data')
+
+        if sha2_signed_data is None:
+            raise ProgramError('No SHA2 signed-data')
+
+        try:
+            certificate = x509.load_der_x509_certificate(certificate, backends.default_backend())
+        except ValueError:
+            raise ProgramError('Invalid certificate')
+
+        public_key = certificate.public_key()
+
+        if not isinstance(public_key, (rsa.RSAPublicKey, ec.EllipticCurvePublicKey)):
+            raise ProgramError('No RSA or EC public-key in certificate')
+
+        (hash_algorithm, sha2_length) = struct.unpack_from('> B H', sha2_signed_data)
+        sha2_signed_data = sha2_signed_data[3:3 + sha2_length]
+
+        if hash_algorithm != HASH_SHA512:
+            raise ProgramError(f'Invalid SHA2 hash-algorithm: {hash_algorithm}')
+
+        self.verify_certificate(certificate, 'Authentication')
+
+        auth_data = device_name.encode('utf-8') + b'\x00' + certificate.public_bytes(serialization.Encoding.DER)
+
+        if isinstance(public_key, rsa.RSAPublicKey):
+            digest = hashes.Hash(hashes.SHA1(), backends.default_backend())
+            digest.update(auth_data)
+            hashed_data = digest.finalize()
+
+            digest = hashes.Hash(hashes.SHA512(), backends.default_backend())
+            digest.update(auth_data)
+            sha2_hashed_data = digest.finalize()
+
+            backend = backends.default_backend()
+
+            public_key = backend._lib.EVP_PKEY_get1_RSA(public_key._evp_pkey)
+            public_key = backend._ffi.gc(public_key, backend._lib.RSA_free)
+
+            key_decrypt = backend._ffi.new('unsigned char[]', backend._lib.RSA_size(public_key))
+
+            if backend._lib.RSA_public_decrypt(len(signed_data), signed_data, key_decrypt, public_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+                error = backend._lib.ERR_get_error()
+                backend._lib.ERR_clear_error()
+
+                raise ProgramError(f'RSA public-decrypt: {error}')
+
+            auth_data = bytes(key_decrypt)
+            auth_data = auth_data[:len(hashed_data)]
+
+            if hashed_data != auth_data:
+                raise ProgramError('Invalid RSA signed-data')
+
+            if backend._lib.RSA_public_decrypt(len(sha2_signed_data), sha2_signed_data, key_decrypt, public_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+                error = backend._lib.ERR_get_error()
+                backend._lib.ERR_clear_error()
+
+                raise ProgramError(f'RSA SHA2 public-decrypt: {error}')
+
+            auth_data = bytes(key_decrypt)
+            auth_data = auth_data[:len(sha2_hashed_data)]
+
+            if sha2_hashed_data != auth_data:
+                raise ProgramError('Invalid SHA2 RSA signed-data')
+
+        elif isinstance(public_key, ec.EllipticCurvePublicKey):
+            try:
+                public_key.verify(signed_data, auth_data, ec.ECDSA(hashes.SHA1()))
+            except InvalidSignature:
+                raise ProgramError('Invalid EC signed-data')
+
+            try:
+                public_key.verify(sha2_signed_data, auth_data, ec.ECDSA(hashes.SHA512()))
+            except InvalidSignature:
+                raise ProgramError('Invalid EC SHA2 signed-data')
+
+    def verify_sudi_data(self, sudi_data):
+        if sudi_data is None:
+            raise ProgramError('No SUDI data')
+
+        sudi_index = 0
+
+        (sudi_length,) = struct.unpack_from('> x H', sudi_data, sudi_index)
+        sudi_index += 3
+
+        certificate = sudi_data[sudi_index:sudi_index + sudi_length]
+        sudi_index += sudi_length
+
+        (sudi_length,) = struct.unpack_from('> x H', sudi_data, sudi_index)
+        sudi_index += 3
+
+        signed_data = sudi_data[sudi_index:sudi_index + sudi_length]
+        sudi_index += sudi_length
+
+        (hash_algorithm, sudi_length) = struct.unpack_from('> B H', sudi_data, sudi_index)
+        sudi_index += 3
+
+        sha2_signed_data = sudi_data[sudi_index:sudi_index + sudi_length]
+        sudi_index += sudi_length
+
+        try:
+            certificate = x509.load_der_x509_certificate(certificate, backends.default_backend())
+        except ValueError:
+            raise ProgramError('Invalid SUDI certificate')
+
+        public_key = certificate.public_key()
+
+        if not isinstance(public_key, rsa.RSAPublicKey):
+            raise ProgramError('No RSA public-key in SUDI certificate')
+
+        if hash_algorithm != HASH_SHA512:
+            raise ProgramError(f'Invalid SHA2 hash-algorithm: {hash_algorithm}')
+
+        self.verify_certificate(certificate, 'SUDI')
+
+        auth_data = struct.pack('< I', self.session_id) + certificate.public_bytes(serialization.Encoding.DER)
+
+        digest = hashes.Hash(hashes.SHA1(), backends.default_backend())
+        digest.update(auth_data)
+        hashed_data = digest.finalize()
+
+        digest = hashes.Hash(hashes.SHA512(), backends.default_backend())
+        digest.update(auth_data)
+        sha2_hashed_data = digest.finalize()
+
+        backend = backends.default_backend()
+
+        public_key = backend._lib.EVP_PKEY_get1_RSA(public_key._evp_pkey)
+        public_key = backend._ffi.gc(public_key, backend._lib.RSA_free)
+
+        key_decrypt = backend._ffi.new('unsigned char[]', backend._lib.RSA_size(public_key))
+
+        if backend._lib.RSA_public_decrypt(len(signed_data), signed_data, key_decrypt, public_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+            error = backend._lib.ERR_get_error()
+            backend._lib.ERR_clear_error()
+
+            raise ProgramError(f'RSA public-decrypt: {error}')
+
+        auth_data = bytes(key_decrypt)
+        auth_data = auth_data[:len(hashed_data)]
+
+        if hashed_data != auth_data:
+            raise ProgramError('Invalid SUDI RSA signed-data')
+
+        if backend._lib.RSA_public_decrypt(len(sha2_signed_data), sha2_signed_data, key_decrypt, public_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+            error = backend._lib.ERR_get_error()
+            backend._lib.ERR_clear_error()
+
+            raise ProgramError(f'SUDI SHA2 RSA public-decrypt: {error}')
+
+        auth_data = bytes(key_decrypt)
+        auth_data = auth_data[:len(sha2_hashed_data)]
+
+        if sha2_hashed_data != auth_data:
+            raise ProgramError('Invalid SUDI SHA2 RSA signed-data')
 
     def install_certificate(self, device_name, key_size, curve, database):
         if key_size:
@@ -403,12 +624,6 @@ class CapfConnection:
                 ELEMENT_KEY_TYPE: KEY_TYPE_RSA,
                 ELEMENT_KEY_SIZE: key_size
             })
-
-            command, elements = self.receive_response()
-
-            # Only occurs when generating an RSA key
-            if command != COMMAND_REQUEST_IN_PROGRESS:
-                raise ProgramError(f'Unexpected command: {command}')
 
         elif curve:
             logging.info('Key Algorithm: EC')
@@ -427,6 +642,9 @@ class CapfConnection:
             })
 
         command, elements = self.receive_response()
+
+        if command == COMMAND_REQUEST_IN_PROGRESS:
+            command, elements = self.receive_response()
 
         if command != COMMAND_KEY_GEN_RESPONSE:
             raise ProgramError(f'Unexpected command: {command}')
@@ -623,8 +841,8 @@ class CapfConnection:
 
 def main():
     try:
-        short_options = 'p:t:A:i:d:H'
-        long_options = ['port=', 'timeout=', 'capf=', 'issuer=', 'days=', 'help']
+        short_options = 'p:t:A:i:d:v:H'
+        long_options = ['port=', 'timeout=', 'capf=', 'issuer=', 'days=', 'verify=', 'help']
 
         try:
             options, arguments = getopt.gnu_getopt(sys.argv[1:], short_options, long_options)
@@ -638,6 +856,7 @@ def main():
         timeout = 10
         capf_certificate_file = None
         issuer_certificate_file = None
+        verify_certificate_files = []
         certificates_dir = None
         help = False
 
@@ -680,6 +899,10 @@ def main():
                 except ValueError:
                     raise ProgramError(f'Invalid days: {validity_days}')
 
+            elif option in ('-v', '--verify'):
+                verify_certificate_file = argument
+                verify_certificate_files.append(verify_certificate_file)
+
             elif option in ('-H', '--help'):
                 help = True
 
@@ -718,6 +941,7 @@ def main():
         CapfConnection.database_file = database_file
         CapfConnection.certificates_dir = certificates_dir
         CapfConnection.issuer_certificate_file = issuer_certificate_file
+        CapfConnection.verify_certificate_files = verify_certificate_files
         CapfConnection.validity_days = validity_days
 
         capf_server = CapfServer(port, timeout, capf_certificate_file)

@@ -226,7 +226,7 @@ class TvsConnection:
 
             elif tag == ELEMENT_CERTIFICATE:
                 certificate = request[index:index + length]
-                elements[ELEMENT_CERTIFICATE] = certificate
+                elements[ELEMENT_CERTIFICATE] = bytes(certificate)
 
             else:
                 raise ProgramError(f'Unknown element tag: {tag}')

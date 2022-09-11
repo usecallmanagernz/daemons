@@ -15,7 +15,7 @@ import struct
 
 from cryptography import x509
 from cryptography.hazmat import backends
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, ec
 
 
@@ -56,22 +56,23 @@ ELEMENT_VERSION = 7
 ELEMENT_AUTH_TYPE = 8
 ELEMENT_PUBLIC_KEY = 9
 ELEMENT_KEY_SIZE = 10
-ELEMENT_AUTH_PASSWORD = 11
+ELEMENT_PASSWORD = 11
 ELEMENT_RETRY_DELAY = 12
 ELEMENT_DEVICE_NAME = 13
 ELEMENT_SUDI_DATA = 16
 ELEMENT_KEY_TYPE = 17
 ELEMENT_EC_CURVE = 18
 ELEMENT_DIGEST_TYPE = 19
-ELEMENT_SIGNED_DATA_SHA2 = 20
+ELEMENT_SHA2_SIGNED_DATA = 20
 
 REASON_NO_ACTION = 0
 REASON_UPDATE_CERTIFICATE = 1
 REASON_INVALID_ELEMENT = 7
 REASON_UNKNOWN_DEVICE = 9
 
-AUTH_TYPE_NONE = 0
-AUTH_TYPE_PASSWORD = 1
+HASH_SHA1 = 1
+HASH_SHA256 = 2
+HASH_SHA512 = 3
 
 CERTIFICATE_TYPE_LSC = 1
 CERTIFICATE_TYPE_MIC = 2
@@ -143,15 +144,21 @@ class CapfClient:
                 response += struct.pack('> B H', ELEMENT_CERTIFICATE, len(certificate))
                 response += certificate
 
+            elif tag == ELEMENT_SIGNED_DATA:
+                signed_data = value
+
+                response += struct.pack('> B H', ELEMENT_SIGNED_DATA, len(signed_data))
+                response += signed_data
+
             elif tag == ELEMENT_VERSION:
                 version = value
                 response += struct.pack('> B H B', ELEMENT_VERSION, 1, version)
 
-            elif tag == ELEMENT_AUTH_PASSWORD:
+            elif tag == ELEMENT_PASSWORD:
                 password = value
                 password = password.encode('utf-8') + b'\x00'
 
-                response += struct.pack('> B H', ELEMENT_AUTH_PASSWORD, len(password))
+                response += struct.pack('> B H', ELEMENT_PASSWORD, len(password))
                 response += password
 
             elif tag == ELEMENT_DEVICE_NAME:
@@ -161,11 +168,23 @@ class CapfClient:
                 response += struct.pack('> B H', ELEMENT_DEVICE_NAME, len(device_name))
                 response += device_name
 
+            elif tag == ELEMENT_SUDI_DATA:
+                sudi_data = value
+
+                response += struct.pack('> B H', ELEMENT_SUDI_DATA, len(sudi_data))
+                response += sudi_data
+
             elif tag == ELEMENT_PUBLIC_KEY:
                 public_key = value
 
                 response += struct.pack('> B H', ELEMENT_PUBLIC_KEY, len(public_key))
                 response += public_key
+
+            elif tag == ELEMENT_SHA2_SIGNED_DATA:
+                sha2_signed_data = value
+
+                response += struct.pack('> B H', ELEMENT_SHA2_SIGNED_DATA, len(sha2_signed_data))
+                response += sha2_signed_data
 
             else:
                 raise ProgramError(f'Unknown element tag: {tag}')
@@ -226,7 +245,7 @@ class CapfClient:
 
             elif tag == ELEMENT_CERTIFICATE:
                 certificate = request[index:index + length]
-                certificate = certificate[5:]
+                certificate = bytes(certificate[5:])
 
                 elements[ELEMENT_CERTIFICATE] = certificate
 
@@ -257,7 +276,7 @@ class CapfClient:
 
         return command, elements
 
-    def scheduled_operation(self, device_name, password, certificate_file):
+    def scheduled_operation(self, device_name, password, local_certificate_file, sudi_certificate_file, certificate_file):
         command, elements = self.receive_request()
 
         if command != COMMAND_AUTH_REQUEST:
@@ -268,11 +287,24 @@ class CapfClient:
         if version != PROTOCOL_VERSION:
             raise ProgramError(f'Invalid protocol version: {version}')
 
+        auth_elements = {ELEMENT_PASSWORD: password or ''}
+
+        if local_certificate_file is not None:
+            certificate, signed_data, sha2_signed_data = self.get_signed_data(device_name, local_certificate_file)
+            sudi_data = self.get_sudi_data(sudi_certificate_file or local_certificate_file)
+
+            auth_elements.update({
+                ELEMENT_CERTIFICATE: certificate,
+                ELEMENT_SIGNED_DATA: signed_data,
+                ELEMENT_SHA2_SIGNED_DATA: sha2_signed_data,
+                ELEMENT_SUDI_DATA: sudi_data
+            })
+
         self.send_response(COMMAND_AUTH_RESPONSE, {
             ELEMENT_REASON: REASON_UPDATE_CERTIFICATE,
             ELEMENT_VERSION: version,
             ELEMENT_DEVICE_NAME: device_name,
-            ELEMENT_AUTH_PASSWORD: password if password is not None else ''
+            **auth_elements
         })
 
         command, elements = self.receive_request()
@@ -296,21 +328,164 @@ class CapfClient:
             if reason in (REASON_NO_ACTION, REASON_UPDATE_CERTIFICATE):
                 print(f'No scheduled operation')
             elif reason == REASON_UNKNOWN_DEVICE:
-                print(f'Unknown device {device_name}')
+                print(f'Unknown device: {device_name}')
             else:
                 print(f'Server ended session: {reason}')
 
         else:
             raise ProgramError(f'Unexpected command: {command}')
 
+    def get_signed_data(self, device_name, local_certificate_file):
+        try:
+            with open(local_certificate_file, 'rb') as file:
+                certificate = private_key = file.read()
+
+        except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
+            raise ProgramError(f'{error.strerror}: {error.filename}')
+
+        try:
+            certificate = x509.load_pem_x509_certificate(certificate, backends.default_backend())
+        except ValueError:
+            raise ProgramError(f'No certificate in file: {local_certificate_file}')
+
+        public_key = certificate.public_key()
+
+        if not isinstance(public_key, (rsa.RSAPublicKey, ec.EllipticCurvePublicKey)):
+            raise ProgramError(f'No RSA or EC public-key in file: {local_certificate_file}')
+
+        try:
+            private_key = serialization.load_pem_private_key(private_key, None, backends.default_backend())
+        except ValueError:
+            raise ProgramError(f'No private-key in file: {local_certificate_file}')
+
+        if not isinstance(private_key, (rsa.RSAPrivateKey, ec.EllipticCurvePrivateKey)):
+            raise ProgramError(f'No RSA or EC private-key in file: {local_certificate_file}')
+
+        certificate = certificate.public_bytes(serialization.Encoding.DER)
+        auth_data = device_name.encode('utf-8') + b'\x00' + certificate
+
+        if isinstance(private_key, rsa.RSAPrivateKey):
+            digest = hashes.Hash(hashes.SHA1(), backends.default_backend())
+            digest.update(auth_data)
+            hashed_data = digest.finalize()
+
+            digest = hashes.Hash(hashes.SHA512(), backends.default_backend())
+            digest.update(auth_data)
+            sha2_hashed_data = digest.finalize()
+
+            backend = backends.default_backend()
+
+            private_key = backend._lib.EVP_PKEY_get1_RSA(private_key._evp_pkey)
+            private_key = backend._ffi.gc(private_key, backend._lib.RSA_free)
+
+            key_encrypt = backend._ffi.new('unsigned char[]', backend._lib.RSA_size(private_key))
+
+            if backend._lib.RSA_private_encrypt(len(hashed_data), hashed_data, key_encrypt, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+                error = backend._lib.ERR_get_error()
+                backend._lib.ERR_clear_error()
+
+                raise ProgramError(f'RSA private-encrypt: {error}')
+
+            signed_data = bytes(backend._ffi.buffer(key_encrypt))
+
+            if backend._lib.RSA_private_encrypt(len(sha2_hashed_data), sha2_hashed_data, key_encrypt, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+                error = backend._lib.ERR_get_error()
+                backend._lib.ERR_clear_error()
+
+                raise ProgramError(f'SHA2 RSA private-encrypt: {error}')
+
+            sha2_signed_data = bytes(backend._ffi.buffer(key_encrypt))
+
+        elif isinstance(private_key, ec.EllipticCurvePrivateKey):
+            signed_data = private_key.sign(auth_data, ec.ECDSA(hashes.SHA1()))
+            sha2_signed_data = private_key.sign(auth_data, ec.ECDSA(hashes.SHA512()))
+
+        sha2_signed_data = struct.pack('> B H', HASH_SHA512, len(sha2_signed_data)) + sha2_signed_data
+
+        return certificate, signed_data, sha2_signed_data
+
+    def get_sudi_data(self, sudi_certificate_file):
+        try:
+            with open(sudi_certificate_file, 'rb') as file:
+                certificate = private_key = file.read()
+
+        except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
+            raise ProgramError(f'{error.strerror}: {error.filename}')
+
+        try:
+            certificate = x509.load_pem_x509_certificate(certificate, backends.default_backend())
+        except ValueError:
+            raise ProgramError(f'No certificate in file: {sudi_certificate_file}')
+
+        public_key = certificate.public_key()
+
+        if not isinstance(public_key, rsa.RSAPublicKey):
+            raise ProgramError(f'No RSA public-key in file: {sudi_certificate_file}')
+
+        try:
+            private_key = serialization.load_pem_private_key(private_key, None, backends.default_backend())
+        except ValueError:
+            raise ProgramError(f'No private-key in file: {sudi_certificate_file}')
+
+        if not isinstance(private_key, rsa.RSAPrivateKey):
+            raise ProgramError(f'No RSA private-key in file: {sudi_certificate_file}')
+
+        certificate = certificate.public_bytes(serialization.Encoding.DER)
+        auth_data = struct.pack('< I', self.session_id) + certificate
+
+        sudi_data = bytearray()
+
+        sudi_data += struct.pack('> B H', 0, len(certificate))
+        sudi_data += certificate
+
+        digest = hashes.Hash(hashes.SHA1(), backends.default_backend())
+        digest.update(auth_data)
+        hashed_data = digest.finalize()
+
+        digest = hashes.Hash(hashes.SHA512(), backends.default_backend())
+        digest.update(auth_data)
+        sha2_hashed_data = digest.finalize()
+
+        backend = backends.default_backend()
+
+        private_key = backend._lib.EVP_PKEY_get1_RSA(private_key._evp_pkey)
+        private_key = backend._ffi.gc(private_key, backend._lib.RSA_free)
+
+        key_encrypt = backend._ffi.new('unsigned char[]', backend._lib.RSA_size(private_key))
+
+        if backend._lib.RSA_private_encrypt(len(hashed_data), hashed_data, key_encrypt, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+            error = backend._lib.ERR_get_error()
+            backend._lib.ERR_clear_error()
+
+            raise ProgramError(f'SUDI RSA private-encrypt: {error}')
+
+        signed_data = bytes(backend._ffi.buffer(key_encrypt))
+
+        if backend._lib.RSA_private_encrypt(len(sha2_hashed_data), sha2_hashed_data, key_encrypt, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+            error = backend._lib.ERR_get_error()
+            backend._lib.ERR_clear_error()
+
+            raise ProgramError(f'SUDI SHA2 RSA private-encrypt: {error}')
+
+        sha2_signed_data = bytes(backend._ffi.buffer(key_encrypt))
+
+        sudi_data += struct.pack('> B H', HASH_SHA1, len(signed_data))
+        sudi_data += signed_data
+
+        sudi_data += struct.pack('> B H', HASH_SHA512, len(sha2_signed_data))
+        sudi_data += sha2_signed_data
+
+        return sudi_data
+
     def generate_key(self, key_type, key_size, ec_curve, certificate_file):
+        self.send_response(COMMAND_REQUEST_IN_PROGRESS, {})
+
         if key_type == KEY_TYPE_RSA:
             if key_size not in (512, 1024, 2048, 3072, 4096):
                 raise ProgramError(f'Invalid key-size: {key_size}')
 
-            self.send_response(COMMAND_REQUEST_IN_PROGRESS, {})
-
             private_key = rsa.generate_private_key(65537, key_size, backends.default_backend())
+
         elif key_type == KEY_TYPE_EC:
             if ec_curve == EC_CURVE_SECP256K1:
                 curve = ec.SECP256K1
@@ -322,6 +497,7 @@ class CapfClient:
                 raise ProgramError(f'Invalid ec-curve: {ec_curve}')
 
             private_key = ec.generate_private_key(curve, backends.default_backend())
+
         else:
             raise ProgramError(f'Invalid key-type: {key_type}')
 
@@ -420,8 +596,8 @@ class CapfClient:
 
 def main():
     try:
-        short_options = 'h:t:A:p:c:H'
-        long_options = ['host=', 'timeout=', 'capf=', 'password=', 'certificate=', 'help']
+        short_options = 'h:t:A:p:l:s:c:H'
+        long_options = ['host=', 'timeout=', 'capf=', 'password=', 'lsc=', 'sudi=', 'certificate=', 'help']
 
         try:
             options, arguments = getopt.gnu_getopt(sys.argv[1:], short_options, long_options)
@@ -432,8 +608,10 @@ def main():
         port = 3804
         timeout = 10
         capf_certificate_file = None
-        certificate_file = None
         password = None
+        local_certificate_file = None
+        sudi_certificate_file = None
+        certificate_file = None
         help = False
 
         for option, argument in options:
@@ -472,6 +650,12 @@ def main():
                 if not re.search(r'(?x) [0-9]{4,16} $', password):
                     raise ProgramError(f'Invalid password: {password}')
 
+            elif option in ('-l', '--lsc'):
+                local_certificate_file = argument
+
+            elif option in ('-s', '--sudi'):
+                sudi_certificate_file = argument
+
             elif option in ('-c', '--certificate'):
                 certificate_file = argument
 
@@ -485,8 +669,10 @@ def main():
                   '  -A, --capf CAPF-CERT-FILE      CAPF certificate file or directory\n'
                   '  -h, --host HOST[:PORT]         host name or IP address and port of the CAPF server\n'
                   '  -t, --timeout TIMEOUT          connection timeout in seconds (default 10)\n'
-                  '  -c, --certificate CERT-FILE    phone certificate (default DEVICE-NAME.pem)\n'
                   '  -p, --password PASSWORD        authentication password, 4 to 16 numbers\n'
+                  '  -l, --lsc CERT-FILE            authentication RSA or EC LSC certificate\n'
+                  '  -s, --sudi CERT-FILE           authentication RSA SUDI certificate (default --lsc)\n'
+                  '  -c, --certificate CERT-FILE    device certificate (default DEVICE-NAME.pem)\n'
                   '  -H, --help                     print this help and exit\n'
                   '\n'
                   'DEVICE-NAME is in SEPMAC format, eg: SEP58971ECC97C1.\n'
@@ -512,7 +698,7 @@ def main():
             raise ProgramError('No CAPF certificate specified')
 
         capf_client = CapfClient(hostname, port, timeout, capf_certificate_file)
-        capf_client.scheduled_operation(device_name, password, certificate_file)
+        capf_client.scheduled_operation(device_name, password, local_certificate_file, sudi_certificate_file, certificate_file)
 
     except ProgramError as error:
         print(str(error), file = sys.stderr)
