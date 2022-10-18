@@ -365,13 +365,13 @@ class CapfClient:
         auth_data = device_name.encode('utf-8') + b'\x00' + certificate
 
         if isinstance(private_key, rsa.RSAPrivateKey):
-            digest = hashes.Hash(hashes.SHA1(), backends.default_backend())
-            digest.update(auth_data)
-            hashed_data = digest.finalize()
+            hash = hashes.Hash(hashes.SHA1(), backends.default_backend())
+            hash.update(auth_data)
+            hashed_data = hash.finalize()
 
-            digest = hashes.Hash(hashes.SHA512(), backends.default_backend())
-            digest.update(auth_data)
-            sha2_hashed_data = digest.finalize()
+            hash = hashes.Hash(hashes.SHA512(), backends.default_backend())
+            hash.update(auth_data)
+            sha2_hashed_data = hash.finalize()
 
             backend = backends.default_backend()
 
@@ -438,13 +438,13 @@ class CapfClient:
         sudi_data += struct.pack('> B H', 0, len(certificate))
         sudi_data += certificate
 
-        digest = hashes.Hash(hashes.SHA1(), backends.default_backend())
-        digest.update(auth_data)
-        hashed_data = digest.finalize()
+        hash = hashes.Hash(hashes.SHA1(), backends.default_backend())
+        hash.update(auth_data)
+        hashed_data = hash.finalize()
 
-        digest = hashes.Hash(hashes.SHA512(), backends.default_backend())
-        digest.update(auth_data)
-        sha2_hashed_data = digest.finalize()
+        hash = hashes.Hash(hashes.SHA512(), backends.default_backend())
+        hash.update(auth_data)
+        sha2_hashed_data = hash.finalize()
 
         backend = backends.default_backend()
 

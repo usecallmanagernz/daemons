@@ -485,13 +485,13 @@ class CapfConnection:
         auth_data = device_name.encode('utf-8') + b'\x00' + certificate.public_bytes(serialization.Encoding.DER)
 
         if isinstance(public_key, rsa.RSAPublicKey):
-            digest = hashes.Hash(hashes.SHA1(), backends.default_backend())
-            digest.update(auth_data)
-            hashed_data = digest.finalize()
+            hash = hashes.Hash(hashes.SHA1(), backends.default_backend())
+            hash.update(auth_data)
+            hashed_data = hash.finalize()
 
-            digest = hashes.Hash(hashes.SHA512(), backends.default_backend())
-            digest.update(auth_data)
-            sha2_hashed_data = digest.finalize()
+            hash = hashes.Hash(hashes.SHA512(), backends.default_backend())
+            hash.update(auth_data)
+            sha2_hashed_data = hash.finalize()
 
             backend = backends.default_backend()
 
@@ -576,13 +576,13 @@ class CapfConnection:
 
         auth_data = struct.pack('< I', self.session_id) + certificate.public_bytes(serialization.Encoding.DER)
 
-        digest = hashes.Hash(hashes.SHA1(), backends.default_backend())
-        digest.update(auth_data)
-        hashed_data = digest.finalize()
+        hash = hashes.Hash(hashes.SHA1(), backends.default_backend())
+        hash.update(auth_data)
+        hashed_data = hash.finalize()
 
-        digest = hashes.Hash(hashes.SHA512(), backends.default_backend())
-        digest.update(auth_data)
-        sha2_hashed_data = digest.finalize()
+        hash = hashes.Hash(hashes.SHA512(), backends.default_backend())
+        hash.update(auth_data)
+        sha2_hashed_data = hash.finalize()
 
         backend = backends.default_backend()
 
