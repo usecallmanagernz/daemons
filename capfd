@@ -487,11 +487,11 @@ class CapfConnection:
         if isinstance(public_key, rsa.RSAPublicKey):
             hash = hashes.Hash(hashes.SHA1(), backends.default_backend())
             hash.update(auth_data)
-            hashed_data = hash.finalize()
+            sha1_hash = hash.finalize()
 
             hash = hashes.Hash(hashes.SHA512(), backends.default_backend())
             hash.update(auth_data)
-            sha2_hashed_data = hash.finalize()
+            sha2_hash = hash.finalize()
 
             backend = backends.default_backend()
 
@@ -506,10 +506,10 @@ class CapfConnection:
 
                 raise ProgramError(f'RSA public-decrypt: {error}')
 
-            auth_data = bytes(key_decrypt)
-            auth_data = auth_data[:len(hashed_data)]
+            auth_data_hash = bytes(key_decrypt)
+            auth_data_hash = auth_data_hash[:len(sha1_hash)]
 
-            if hashed_data != auth_data:
+            if sha1_hash != auth_data_hash:
                 raise ProgramError('Invalid RSA signed-data')
 
             if backend._lib.RSA_public_decrypt(len(sha2_signed_data), sha2_signed_data, key_decrypt, public_key, backend._lib.RSA_PKCS1_PADDING) == -1:
@@ -518,10 +518,10 @@ class CapfConnection:
 
                 raise ProgramError(f'RSA SHA2 public-decrypt: {error}')
 
-            auth_data = bytes(key_decrypt)
-            auth_data = auth_data[:len(sha2_hashed_data)]
+            auth_data_hash = bytes(key_decrypt)
+            auth_data_hash = auth_data_hash[:len(sha2_hash)]
 
-            if sha2_hashed_data != auth_data:
+            if sha2_hash != auth_data_hash:
                 raise ProgramError('Invalid SHA2 RSA signed-data')
 
         elif isinstance(public_key, ec.EllipticCurvePublicKey):
@@ -578,11 +578,11 @@ class CapfConnection:
 
         hash = hashes.Hash(hashes.SHA1(), backends.default_backend())
         hash.update(auth_data)
-        hashed_data = hash.finalize()
+        sha1_hash = hash.finalize()
 
         hash = hashes.Hash(hashes.SHA512(), backends.default_backend())
         hash.update(auth_data)
-        sha2_hashed_data = hash.finalize()
+        sha2_hash = hash.finalize()
 
         backend = backends.default_backend()
 
@@ -597,10 +597,10 @@ class CapfConnection:
 
             raise ProgramError(f'RSA public-decrypt: {error}')
 
-        auth_data = bytes(key_decrypt)
-        auth_data = auth_data[:len(hashed_data)]
+        auth_data_hash = bytes(key_decrypt)
+        auth_data_hash = auth_data_hash[:len(sha1_hash)]
 
-        if hashed_data != auth_data:
+        if sha1_hash != auth_data_hash:
             raise ProgramError('Invalid SUDI RSA signed-data')
 
         if backend._lib.RSA_public_decrypt(len(sha2_signed_data), sha2_signed_data, key_decrypt, public_key, backend._lib.RSA_PKCS1_PADDING) == -1:
@@ -609,10 +609,10 @@ class CapfConnection:
 
             raise ProgramError(f'SUDI SHA2 RSA public-decrypt: {error}')
 
-        auth_data = bytes(key_decrypt)
-        auth_data = auth_data[:len(sha2_hashed_data)]
+        auth_data_hash = bytes(key_decrypt)
+        auth_data_hash = auth_data_hash[:len(sha2_hash)]
 
-        if sha2_hashed_data != auth_data:
+        if sha2_hash != auth_data_hash:
             raise ProgramError('Invalid SUDI SHA2 RSA signed-data')
 
     def install_certificate(self, device_name, key_size, curve, database):

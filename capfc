@@ -367,11 +367,11 @@ class CapfClient:
         if isinstance(private_key, rsa.RSAPrivateKey):
             hash = hashes.Hash(hashes.SHA1(), backends.default_backend())
             hash.update(auth_data)
-            hashed_data = hash.finalize()
+            sha1_hash = hash.finalize()
 
             hash = hashes.Hash(hashes.SHA512(), backends.default_backend())
             hash.update(auth_data)
-            sha2_hashed_data = hash.finalize()
+            sha2_hash = hash.finalize()
 
             backend = backends.default_backend()
 
@@ -380,7 +380,7 @@ class CapfClient:
 
             key_encrypt = backend._ffi.new('unsigned char[]', backend._lib.RSA_size(private_key))
 
-            if backend._lib.RSA_private_encrypt(len(hashed_data), hashed_data, key_encrypt, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+            if backend._lib.RSA_private_encrypt(len(sha1_hash), sha1_hash, key_encrypt, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
                 error = backend._lib.ERR_get_error()
                 backend._lib.ERR_clear_error()
 
@@ -388,7 +388,7 @@ class CapfClient:
 
             signed_data = bytes(backend._ffi.buffer(key_encrypt))
 
-            if backend._lib.RSA_private_encrypt(len(sha2_hashed_data), sha2_hashed_data, key_encrypt, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+            if backend._lib.RSA_private_encrypt(len(sha2_hash), sha2_hash, key_encrypt, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
                 error = backend._lib.ERR_get_error()
                 backend._lib.ERR_clear_error()
 
@@ -440,11 +440,11 @@ class CapfClient:
 
         hash = hashes.Hash(hashes.SHA1(), backends.default_backend())
         hash.update(auth_data)
-        hashed_data = hash.finalize()
+        sha1_hash = hash.finalize()
 
         hash = hashes.Hash(hashes.SHA512(), backends.default_backend())
         hash.update(auth_data)
-        sha2_hashed_data = hash.finalize()
+        sha2_hash = hash.finalize()
 
         backend = backends.default_backend()
 
@@ -453,7 +453,7 @@ class CapfClient:
 
         key_encrypt = backend._ffi.new('unsigned char[]', backend._lib.RSA_size(private_key))
 
-        if backend._lib.RSA_private_encrypt(len(hashed_data), hashed_data, key_encrypt, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+        if backend._lib.RSA_private_encrypt(len(sha1_hash), sha1_hash, key_encrypt, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
             error = backend._lib.ERR_get_error()
             backend._lib.ERR_clear_error()
 
@@ -461,7 +461,7 @@ class CapfClient:
 
         signed_data = bytes(backend._ffi.buffer(key_encrypt))
 
-        if backend._lib.RSA_private_encrypt(len(sha2_hashed_data), sha2_hashed_data, key_encrypt, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+        if backend._lib.RSA_private_encrypt(len(sha2_hash), sha2_hash, key_encrypt, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
             error = backend._lib.ERR_get_error()
             backend._lib.ERR_clear_error()
 
