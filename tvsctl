@@ -200,7 +200,7 @@ def main():
                     raise ProgramError(f'Invalid ttl: {ttl}')
 
                 if ttl < 1 or ttl > 2592000:
-                    raise ProgramError(f'TTL must be between 1 and 2592000')
+                    raise ProgramError('TTL must be between 1 and 2592000')
 
             elif option in ('-s', '--sast'):
                 roles.add('SAST')
