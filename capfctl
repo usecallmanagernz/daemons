@@ -204,7 +204,7 @@ def main():
                 curve = argument
                 key_size = None
 
-                if curve not in ('secp256k1', 'secp384p1', 'secp521r1'):
+                if curve not in ('secp256r1', 'secp384r1', 'secp521r1'):
                     raise ProgramError(f'Invalid curve: {curve}')
 
             elif option in ('-r', '--remove'):
@@ -233,7 +233,7 @@ def main():
                   '  -p, --password PASSWORD        authenticate using password\n'
                   '  -c, --certificate              authenticate using installed certificate\n'
                   '  -b, --bits, --key-size BITS    RSA key-size: 512, 1024, 2048, 3072 or 4096 (default 2048)\n'
-                  '  -E, --curve CURVE              EC algorithm: secp256k1, secp384p1 or secp521r1\n'
+                  '  -E, --curve CURVE              EC algorithm: secp256r1, secp384r1 or secp521r1\n'
                   '  -r, --remove DEVICE-NAME       remove device from database\n'
                   '  -e, --export DEVICE-NAME       export device certificate from database\n'
                   '  -H, --help                     print this help and exit\n'

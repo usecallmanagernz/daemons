@@ -95,8 +95,8 @@ CERTIFICATE_TYPE_MIC = 2
 KEY_TYPE_RSA = 0
 KEY_TYPE_EC = 1
 
-EC_CURVE_SECP256K1 = 0
-EC_CURVE_SECP384P1 = 1
+EC_CURVE_SECP256R1 = 0
+EC_CURVE_SECP384R1 = 1
 EC_CURVE_SECP521R1 = 2
 
 
@@ -629,10 +629,11 @@ class CapfConnection:
             logging.info('Key Algorithm: EC')
             logging.info('Curve: %s', curve)
 
-            if curve == 'secp256k1':
-                ec_curve = EC_CURVE_SECP256K1
-            elif curve == 'secp384p1':
-                ec_curve = EC_CURVE_SECP384P1
+            # OpenSSL name for this curve is prime256v1
+            if curve == 'secp256r1':
+                ec_curve = EC_CURVE_SECP256R1
+            elif curve == 'secp384r1':
+                ec_curve = EC_CURVE_SECP384R1
             elif key_size == 'secp521r1':
                 ec_curve = EC_CURVE_SECP521R1
 
