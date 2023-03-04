@@ -28,7 +28,7 @@ def setup_database(database):
         return
 
     cursor.execute('CREATE TABLE devices (device_name TEXT PRIMARY KEY, operation TEXT NOT NULL, '
-                   'authentication TEXT, password TEXT, key_size INTEGER, curve TEXT, certificate TEXT, '
+                   'authentication TEXT, password TEXT, key_size INTEGER, curve_name TEXT, certificate TEXT, '
                    'serial_number TEXT, not_valid_before TEXT, not_valid_after TEXT) WITHOUT ROWID')
 
     database.commit()
@@ -36,26 +36,26 @@ def setup_database(database):
     print('Setup database')
 
 
-def set_device_operation(database, device_name, operation, authentication, password, key_size, curve):
+def set_device_operation(database, device_name, operation, authentication, password, key_size, curve_name):
     cursor = database.cursor()
 
-    cursor.execute('INSERT INTO devices (device_name, operation, authentication, password, key_size, curve) '
+    cursor.execute('INSERT INTO devices (device_name, operation, authentication, password, key_size, curve_name) '
                    'VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (device_name) DO UPDATE '
-                   'SET operation = excluded.operation, authentication = excluded.authentication, password = excluded.password, key_size = excluded.key_size, curve = excluded.curve',
+                   'SET operation = excluded.operation, authentication = excluded.authentication, password = excluded.password, key_size = excluded.key_size, curve_name = excluded.curve_name',
                    (device_name,
                     operation,
                     authentication,
                     password,
                     key_size,
-                    curve))
+                    curve_name))
 
     database.commit()
 
     if operation == 'install':
         if key_size:
             print('Scheduled install on', device_name, 'with RSA', key_size, 'using', authentication)
-        elif curve:
-            print('Scheduled install on', device_name, 'with EC', curve, 'using', authentication)
+        elif curve_name:
+            print('Scheduled install on', device_name, 'with EC', curve_name, 'using', authentication)
 
     elif operation == 'fetch':
         print('Scheduled fetch on', device_name, 'using', authentication)
@@ -108,7 +108,7 @@ def export_certificate(database, device_name):
 def list_devices(database):
     cursor = database.cursor()
 
-    cursor.execute('SELECT device_name, operation, authentication, password, key_size, curve, certificate, serial_number, not_valid_before, not_valid_after '
+    cursor.execute('SELECT device_name, operation, authentication, password, key_size, curve_name, certificate, serial_number, not_valid_before, not_valid_after '
                    'FROM devices ORDER BY device_name ASC')
 
     rows = cursor.fetchall()
@@ -128,9 +128,9 @@ def list_devices(database):
         if row['key_size']:
             print('Key Algorithm:       RSA')
             print('Key Size:           ', row['key_size'])
-        elif row['curve']:
+        elif row['curve_name']:
             print('Key Algorithm:       EC')
-            print('Curve:              ', row['curve'])
+            print('Curve:              ', row['curve_name'])
 
         if row['certificate'] is not None:
             print('Serial Number:      ', row['serial_number'])
@@ -157,7 +157,7 @@ def main():
         authentication = 'no password'
         password = None
         key_size = 2048
-        curve = None
+        curve_name = None
 
         help = False
 
@@ -189,7 +189,7 @@ def main():
 
             elif option in ('-b', '--bits', '--key-size'):
                 key_size = argument
-                curve = None
+                curve_name = None
 
                 try:
                     key_size = int(key_size)
@@ -201,11 +201,11 @@ def main():
                     raise ProgramError(f'Invalid key-size: {key_size}')
 
             elif option in ('-E', '--curve'):
-                curve = argument
+                curve_name = argument
                 key_size = None
 
-                if curve not in ('secp256r1', 'secp384r1', 'secp521r1'):
-                    raise ProgramError(f'Invalid curve: {curve}')
+                if curve_name not in ('secp256r1', 'secp384r1', 'secp521r1'):
+                    raise ProgramError(f'Invalid curve: {curve_name}')
 
             elif option in ('-r', '--remove'):
                 mode = 'remove'
@@ -260,7 +260,7 @@ def main():
             setup_database(database)
 
             if mode == 'set':
-                set_device_operation(database, device_name, operation, authentication, password, key_size, curve)
+                set_device_operation(database, device_name, operation, authentication, password, key_size, curve_name)
 
             elif mode == 'remove':
                 remove_device(database, device_name)

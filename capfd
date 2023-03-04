@@ -70,7 +70,7 @@ ELEMENT_RETRY_DELAY = 12
 ELEMENT_DEVICE_NAME = 13
 ELEMENT_SUDI_DATA = 16
 ELEMENT_KEY_TYPE = 17
-ELEMENT_EC_CURVE = 18
+ELEMENT_CURVE = 18
 ELEMENT_DIGEST_TYPE = 19
 ELEMENT_SHA2_SIGNED_DATA = 20
 
@@ -95,9 +95,9 @@ CERTIFICATE_TYPE_MIC = 2
 KEY_TYPE_RSA = 0
 KEY_TYPE_EC = 1
 
-EC_CURVE_SECP256R1 = 0
-EC_CURVE_SECP384R1 = 1
-EC_CURVE_SECP521R1 = 2
+CURVE_SECP256R1 = 0
+CURVE_SECP384R1 = 1
+CURVE_SECP521R1 = 2
 
 
 threading.main_thread().name = 'CAPF'
@@ -226,7 +226,7 @@ class CapfConnection:
                 database.row_factory = sqlite3.Row
                 cursor = database.cursor()
 
-                cursor.execute('SELECT operation, authentication, password, key_size, curve FROM devices WHERE device_name = ?',
+                cursor.execute('SELECT operation, authentication, password, key_size, curve_name FROM devices WHERE device_name = ?',
                                (device_name,))
 
                 row = cursor.fetchone()
@@ -257,7 +257,7 @@ class CapfConnection:
                 logging.info('Scheduled Operation: %s', row['operation'].title())
 
                 if row['operation'] == 'install':
-                    self.install_certificate(device_name, row['key_size'], row['curve'], database)
+                    self.install_certificate(device_name, row['key_size'], row['curve_name'], database)
 
                 elif row['operation'] == 'fetch':
                     self.fetch_certificate(device_name, database)
@@ -310,9 +310,9 @@ class CapfConnection:
                 key_type = value
                 request += struct.pack('> B H B', ELEMENT_KEY_TYPE, 1, key_type)
 
-            elif tag == ELEMENT_EC_CURVE:
-                ec_curve = value
-                request += struct.pack('> B H B', ELEMENT_EC_CURVE, 1, ec_curve)
+            elif tag == ELEMENT_CURVE:
+                curve = value
+                request += struct.pack('> B H B', ELEMENT_CURVE, 1, curve)
 
             else:
                 raise ProgramError(f'Unknown element tag: {tag}')
@@ -615,7 +615,7 @@ class CapfConnection:
         if sha2_hash != auth_data_hash:
             raise ProgramError('Invalid SUDI SHA2 RSA signed-data')
 
-    def install_certificate(self, device_name, key_size, curve, database):
+    def install_certificate(self, device_name, key_size, curve_name, database):
         if key_size:
             logging.info('Key Algorithm: RSA')
             logging.info('Key Size %d', key_size)
@@ -625,21 +625,21 @@ class CapfConnection:
                 ELEMENT_KEY_SIZE: key_size
             })
 
-        elif curve:
+        elif curve_name:
             logging.info('Key Algorithm: EC')
-            logging.info('Curve: %s', curve)
+            logging.info('Curve: %s', curve_name)
 
             # OpenSSL name for this curve is prime256v1
-            if curve == 'secp256r1':
-                ec_curve = EC_CURVE_SECP256R1
-            elif curve == 'secp384r1':
-                ec_curve = EC_CURVE_SECP384R1
-            elif key_size == 'secp521r1':
-                ec_curve = EC_CURVE_SECP521R1
+            if curve_name == 'secp256r1':
+                curve = CURVE_SECP256R1
+            elif curve_name == 'secp384r1':
+                curve = CURVE_SECP384R1
+            elif curve_name == 'secp521r1':
+                curve = CURVE_SECP521R1
 
             self.send_request(COMMAND_KEY_GEN_REQUEST, {
                 ELEMENT_KEY_TYPE: KEY_TYPE_EC,
-                ELEMENT_EC_CURVE: ec_curve
+                ELEMENT_CURVE: curve
             })
 
         command, elements = self.receive_response()
