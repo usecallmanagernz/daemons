@@ -44,4 +44,4 @@ jobs:
 
       - name: Run pylint 
         run: |
-          pylint tvsd tvsc tvsctl 
+          pylint tvsd tvsc tvsctl capfd capfc capfctl
