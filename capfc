@@ -326,7 +326,7 @@ class CapfClient:
             reason = elements.get(ELEMENT_REASON, -1)
 
             if reason in (REASON_NO_ACTION, REASON_UPDATE_CERTIFICATE):
-                print(f'No scheduled operation')
+                print('No scheduled operation')
             elif reason == REASON_UNKNOWN_DEVICE:
                 print(f'Unknown device: {device_name}')
             else:
@@ -515,7 +515,7 @@ class CapfClient:
         certificate = elements.get(ELEMENT_CERTIFICATE, None)
 
         if certificate is None:
-            raise ProgramError(f'Missing certificate element')
+            raise ProgramError('Missing certificate element')
 
         try:
             certificate = x509.load_der_x509_certificate(certificate, backends.default_backend())
@@ -567,7 +567,7 @@ class CapfClient:
 
             print(f'{certificate_file} does not exist')
 
-        command, elements = self.receive_request()
+        command, _ = self.receive_request()
 
         if command != COMMAND_END_SESSION:
             raise ProgramError(f'Unexpected command: {command}')
@@ -588,7 +588,7 @@ class CapfClient:
 
             print(f'{certificate_file} does not exist')
 
-        command, elements = self.receive_request()
+        command, _ = self.receive_request()
 
         if command != COMMAND_END_SESSION:
             raise ProgramError(f'Unexpected command: {command}')

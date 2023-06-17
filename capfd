@@ -218,7 +218,7 @@ class CapfConnection:
             device_name = elements.get(ELEMENT_DEVICE_NAME, None)
 
             if device_name is None:
-                raise ProgramError(f'Missing device name element')
+                raise ProgramError('Missing device name element')
 
             logging.info('Device Name: %s', device_name)
 
@@ -243,7 +243,7 @@ class CapfConnection:
                     password = elements.get(ELEMENT_PASSWORD, None)
 
                     if row['password'] != password:
-                        raise ProgramError(f'Incorrect password')
+                        raise ProgramError('Incorrect password')
 
                 elif row['authentication'] == 'certificate':
                     certificate = elements.get(ELEMENT_CERTIFICATE, None)
@@ -452,7 +452,7 @@ class CapfConnection:
             break
 
         else:
-            raise ProgramError(f'Unknown certificate issuer')
+            raise ProgramError('Unknown certificate issuer')
 
     def verify_signed_data(self, device_name, certificate, signed_data, sha2_signed_data):
         if certificate is None:
