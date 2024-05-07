@@ -378,23 +378,23 @@ class CapfClient:
             private_key = backend._lib.EVP_PKEY_get1_RSA(private_key._evp_pkey)
             private_key = backend._ffi.gc(private_key, backend._lib.RSA_free)
 
-            key_encrypt = backend._ffi.new('unsigned char[]', backend._lib.RSA_size(private_key))
+            encrypted = backend._ffi.new('unsigned char[]', backend._lib.RSA_size(private_key))
 
-            if backend._lib.RSA_private_encrypt(len(sha1_hash), sha1_hash, key_encrypt, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+            if backend._lib.RSA_private_encrypt(len(sha1_hash), sha1_hash, encrypted, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
                 error = backend._lib.ERR_get_error()
                 backend._lib.ERR_clear_error()
 
                 raise ProgramError(f'RSA private-encrypt: {error}')
 
-            signed_data = bytes(backend._ffi.buffer(key_encrypt))
+            signed_data = bytes(backend._ffi.buffer(encrypted))
 
-            if backend._lib.RSA_private_encrypt(len(sha2_hash), sha2_hash, key_encrypt, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+            if backend._lib.RSA_private_encrypt(len(sha2_hash), sha2_hash, encrypted, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
                 error = backend._lib.ERR_get_error()
                 backend._lib.ERR_clear_error()
 
                 raise ProgramError(f'SHA2 RSA private-encrypt: {error}')
 
-            sha2_signed_data = bytes(backend._ffi.buffer(key_encrypt))
+            sha2_signed_data = bytes(backend._ffi.buffer(encrypted))
 
         elif isinstance(private_key, ec.EllipticCurvePrivateKey):
             signed_data = private_key.sign(auth_data, ec.ECDSA(hashes.SHA1()))
@@ -451,23 +451,23 @@ class CapfClient:
         private_key = backend._lib.EVP_PKEY_get1_RSA(private_key._evp_pkey)
         private_key = backend._ffi.gc(private_key, backend._lib.RSA_free)
 
-        key_encrypt = backend._ffi.new('unsigned char[]', backend._lib.RSA_size(private_key))
+        encrypted = backend._ffi.new('unsigned char[]', backend._lib.RSA_size(private_key))
 
-        if backend._lib.RSA_private_encrypt(len(sha1_hash), sha1_hash, key_encrypt, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+        if backend._lib.RSA_private_encrypt(len(sha1_hash), sha1_hash, encrypted, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
             error = backend._lib.ERR_get_error()
             backend._lib.ERR_clear_error()
 
             raise ProgramError(f'SUDI RSA private-encrypt: {error}')
 
-        signed_data = bytes(backend._ffi.buffer(key_encrypt))
+        signed_data = bytes(backend._ffi.buffer(encrypted))
 
-        if backend._lib.RSA_private_encrypt(len(sha2_hash), sha2_hash, key_encrypt, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+        if backend._lib.RSA_private_encrypt(len(sha2_hash), sha2_hash, encrypted, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
             error = backend._lib.ERR_get_error()
             backend._lib.ERR_clear_error()
 
             raise ProgramError(f'SUDI SHA2 RSA private-encrypt: {error}')
 
-        sha2_signed_data = bytes(backend._ffi.buffer(key_encrypt))
+        sha2_signed_data = bytes(backend._ffi.buffer(encrypted))
 
         sudi_data += struct.pack('> B H', HASH_SHA1, len(signed_data))
         sudi_data += signed_data

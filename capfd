@@ -503,27 +503,27 @@ class CapfConnection:
             public_key = backend._lib.EVP_PKEY_get1_RSA(public_key._evp_pkey)
             public_key = backend._ffi.gc(public_key, backend._lib.RSA_free)
 
-            key_decrypt = backend._ffi.new('unsigned char[]', backend._lib.RSA_size(public_key))
+            decrypted = backend._ffi.new('unsigned char[]', backend._lib.RSA_size(public_key))
 
-            if backend._lib.RSA_public_decrypt(len(signed_data), signed_data, key_decrypt, public_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+            if backend._lib.RSA_public_decrypt(len(signed_data), signed_data, decrypted, public_key, backend._lib.RSA_PKCS1_PADDING) == -1:
                 error = backend._lib.ERR_get_error()
                 backend._lib.ERR_clear_error()
 
                 raise ProgramError(f'RSA public-decrypt: {error}')
 
-            auth_data_hash = bytes(key_decrypt)
+            auth_data_hash = bytes(decrypted)
             auth_data_hash = auth_data_hash[:len(sha1_hash)]
 
             if sha1_hash != auth_data_hash:
                 raise ProgramError('Invalid RSA signed-data')
 
-            if backend._lib.RSA_public_decrypt(len(sha2_signed_data), sha2_signed_data, key_decrypt, public_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+            if backend._lib.RSA_public_decrypt(len(sha2_signed_data), sha2_signed_data, decrypted, public_key, backend._lib.RSA_PKCS1_PADDING) == -1:
                 error = backend._lib.ERR_get_error()
                 backend._lib.ERR_clear_error()
 
                 raise ProgramError(f'RSA SHA2 public-decrypt: {error}')
 
-            auth_data_hash = bytes(key_decrypt)
+            auth_data_hash = bytes(decrypted)
             auth_data_hash = auth_data_hash[:len(sha2_hash)]
 
             if sha2_hash != auth_data_hash:
@@ -594,27 +594,27 @@ class CapfConnection:
         public_key = backend._lib.EVP_PKEY_get1_RSA(public_key._evp_pkey)
         public_key = backend._ffi.gc(public_key, backend._lib.RSA_free)
 
-        key_decrypt = backend._ffi.new('unsigned char[]', backend._lib.RSA_size(public_key))
+        decrypted = backend._ffi.new('unsigned char[]', backend._lib.RSA_size(public_key))
 
-        if backend._lib.RSA_public_decrypt(len(signed_data), signed_data, key_decrypt, public_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+        if backend._lib.RSA_public_decrypt(len(signed_data), signed_data, decrypted, public_key, backend._lib.RSA_PKCS1_PADDING) == -1:
             error = backend._lib.ERR_get_error()
             backend._lib.ERR_clear_error()
 
             raise ProgramError(f'RSA public-decrypt: {error}')
 
-        auth_data_hash = bytes(key_decrypt)
+        auth_data_hash = bytes(decrypted)
         auth_data_hash = auth_data_hash[:len(sha1_hash)]
 
         if sha1_hash != auth_data_hash:
             raise ProgramError('Invalid SUDI RSA signed-data')
 
-        if backend._lib.RSA_public_decrypt(len(sha2_signed_data), sha2_signed_data, key_decrypt, public_key, backend._lib.RSA_PKCS1_PADDING) == -1:
+        if backend._lib.RSA_public_decrypt(len(sha2_signed_data), sha2_signed_data, decrypted, public_key, backend._lib.RSA_PKCS1_PADDING) == -1:
             error = backend._lib.ERR_get_error()
             backend._lib.ERR_clear_error()
 
             raise ProgramError(f'SUDI SHA2 RSA public-decrypt: {error}')
 
-        auth_data_hash = bytes(key_decrypt)
+        auth_data_hash = bytes(decrypted)
         auth_data_hash = auth_data_hash[:len(sha2_hash)]
 
         if sha2_hash != auth_data_hash:
