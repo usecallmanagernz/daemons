@@ -24,18 +24,18 @@ PROTOCOL_VERSION = 3
 
 COMMAND_AUTH_REQUEST = 1
 COMMAND_AUTH_RESPONSE = 2
-COMMAND_KEY_GEN_REQUEST = 3
-COMMAND_KEY_GEN_RESPONSE = 4
+COMMAND_KEY_GENERATE_REQUEST = 3
+COMMAND_KEY_GENERATE_RESPONSE = 4
 COMMAND_ENCRYPT_RESPONSE = 5
 COMMAND_ENCRYPT_REQUEST = 6
 COMMAND_DECRYPT_REQUEST = 7
 COMMAND_DECRYPT_RESPONSE = 8
-COMMAND_STORE_CERT_REQUEST = 9
-COMMAND_STORE_CERT_RESPONSE = 10
-COMMAND_FETCH_CERT_REQUEST = 11
-COMMAND_FETCH_CERT_RESPONSE = 12
-COMMAND_DELETE_CERT_REQUEST = 13
-COMMAND_DELETE_CERT_RESPONSE = 14
+COMMAND_STORE_CERTIFICATE_REQUEST = 9
+COMMAND_STORE_CERTIFICATE_RESPONSE = 10
+COMMAND_FETCH_CERTIFICATE_REQUEST = 11
+COMMAND_FETCH_CERTIFICATE_RESPONSE = 12
+COMMAND_DELETE_CERTIFICATE_REQUEST = 13
+COMMAND_DELETE_CERTIFICATE_RESPONSE = 14
 COMMAND_END_SESSION = 15
 COMMAND_RETRY_LATER = 16
 COMMAND_REQUEST_IN_PROGRESS = 17
@@ -43,8 +43,8 @@ COMMAND_STATUS_REQUEST = 18
 COMMAND_STATUS_RESPONSE = 19
 COMMAND_ABORT_REQUEST = 20
 COMMAND_ABORT_RESPONSE = 21
-COMMAND_SIGN_CERT_REQUEST = 22
-COMMAND_SIGN_CERT_RESPONSE = 23
+COMMAND_SIGN_CERTIFICATE_REQUEST = 22
+COMMAND_SIGN_CERTIFICATE_RESPONSE = 23
 
 ELEMENT_REASON = 1
 ELEMENT_REASON_INFO = 2
@@ -309,17 +309,17 @@ class CapfClient:
 
         command, elements = self.receive_request()
 
-        if command == COMMAND_KEY_GEN_REQUEST:
+        if command == COMMAND_KEY_GENERATE_REQUEST:
             key_type = elements.get(ELEMENT_KEY_TYPE, None)
             key_size = elements.get(ELEMENT_KEY_SIZE, None)
             curve = elements.get(ELEMENT_CURVE, None)
 
             self.generate_key(key_type, key_size, curve, certificate_file)
 
-        elif command == COMMAND_FETCH_CERT_REQUEST:
+        elif command == COMMAND_FETCH_CERTIFICATE_REQUEST:
             self.store_certificate(certificate_file)
 
-        elif command == COMMAND_DELETE_CERT_REQUEST:
+        elif command == COMMAND_DELETE_CERTIFICATE_REQUEST:
             self.delete_certificate(certificate_file)
 
         elif command == COMMAND_END_SESSION:
@@ -503,13 +503,13 @@ class CapfClient:
 
         public_key = private_key.public_key()
 
-        self.send_response(COMMAND_KEY_GEN_RESPONSE, {
+        self.send_response(COMMAND_KEY_GENERATE_RESPONSE, {
             ELEMENT_PUBLIC_KEY: public_key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
         })
 
         command, elements = self.receive_request()
 
-        if command != COMMAND_STORE_CERT_REQUEST:
+        if command != COMMAND_STORE_CERTIFICATE_REQUEST:
             raise ProgramError(f'Unexpected command: {command}')
 
         certificate = elements.get(ELEMENT_CERTIFICATE, None)
@@ -532,7 +532,7 @@ class CapfClient:
 
         print(f'Wrote {certificate_file}')
 
-        self.send_response(COMMAND_STORE_CERT_RESPONSE, {
+        self.send_response(COMMAND_STORE_CERTIFICATE_RESPONSE, {
             ELEMENT_REASON: REASON_UPDATE_CERTIFICATE
         })
 
@@ -555,7 +555,7 @@ class CapfClient:
             except ValueError:
                 raise ProgramError('Invalid certificate')
 
-            self.send_response(COMMAND_FETCH_CERT_RESPONSE, {
+            self.send_response(COMMAND_FETCH_CERTIFICATE_RESPONSE, {
                 ELEMENT_REASON: REASON_UPDATE_CERTIFICATE,
                 ELEMENT_CERTIFICATE: certificate.public_bytes(serialization.Encoding.DER)
             })
@@ -563,7 +563,7 @@ class CapfClient:
             print(f'Stored {certificate_file}')
 
         else:
-            self.send_response(COMMAND_FETCH_CERT_RESPONSE, {ELEMENT_REASON: REASON_INVALID_ELEMENT})
+            self.send_response(COMMAND_FETCH_CERTIFICATE_RESPONSE, {ELEMENT_REASON: REASON_INVALID_ELEMENT})
 
             print(f'{certificate_file} does not exist')
 
@@ -579,12 +579,12 @@ class CapfClient:
             except (PermissionError, IsADirectoryError) as error:
                 raise ProgramError(f'{error.strerror}: {error.filename}')
 
-            self.send_response(COMMAND_DELETE_CERT_RESPONSE, {ELEMENT_REASON: REASON_UPDATE_CERTIFICATE})
+            self.send_response(COMMAND_DELETE_CERTIFICATE_RESPONSE, {ELEMENT_REASON: REASON_UPDATE_CERTIFICATE})
 
             print(f'Deleted {certificate_file}')
 
         else:
-            self.send_response(COMMAND_DELETE_CERT_RESPONSE, {ELEMENT_REASON: REASON_INVALID_ELEMENT})
+            self.send_response(COMMAND_DELETE_CERTIFICATE_RESPONSE, {ELEMENT_REASON: REASON_INVALID_ELEMENT})
 
             print(f'{certificate_file} does not exist')
 
@@ -638,6 +638,10 @@ def main():
 
                 try:
                     timeout = int(timeout)
+
+                    if timeout < 1:
+                        raise ValueError
+
                 except ValueError:
                     raise ProgramError(f'Invalid timeout: {timeout}')
 

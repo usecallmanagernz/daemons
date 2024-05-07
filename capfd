@@ -33,18 +33,18 @@ PROTOCOL_VERSION = 3
 
 COMMAND_AUTH_REQUEST = 1
 COMMAND_AUTH_RESPONSE = 2
-COMMAND_KEY_GEN_REQUEST = 3
-COMMAND_KEY_GEN_RESPONSE = 4
+COMMAND_KEY_GENERATE_REQUEST = 3
+COMMAND_KEY_GENERATE_RESPONSE = 4
 COMMAND_ENCRYPT_RESPONSE = 5
 COMMAND_ENCRYPT_REQUEST = 6
 COMMAND_DECRYPT_REQUEST = 7
 COMMAND_DECRYPT_RESPONSE = 8
-COMMAND_STORE_CERT_REQUEST = 9
-COMMAND_STORE_CERT_RESPONSE = 10
-COMMAND_FETCH_CERT_REQUEST = 11
-COMMAND_FETCH_CERT_RESPONSE = 12
-COMMAND_DELETE_CERT_REQUEST = 13
-COMMAND_DELETE_CERT_RESPONSE = 14
+COMMAND_STORE_CERTIFICATE_REQUEST = 9
+COMMAND_STORE_CERTIFICATE_RESPONSE = 10
+COMMAND_FETCH_CERTIFICATE_REQUEST = 11
+COMMAND_FETCH_CERTIFICATE_RESPONSE = 12
+COMMAND_DELETE_CERTIFICATE_REQUEST = 13
+COMMAND_DELETE_CERTIFICATE_RESPONSE = 14
 COMMAND_END_SESSION = 15
 COMMAND_RETRY_LATER = 16
 COMMAND_REQUEST_IN_PROGRESS = 17
@@ -52,8 +52,8 @@ COMMAND_STATUS_REQUEST = 18
 COMMAND_STATUS_RESPONSE = 19
 COMMAND_ABORT_REQUEST = 20
 COMMAND_ABORT_RESPONSE = 21
-COMMAND_SIGN_CERT_REQUEST = 22
-COMMAND_SIGN_CERT_RESPONSE = 23
+COMMAND_SIGN_CERTIFICATE_REQUEST = 22
+COMMAND_SIGN_CERTIFICATE_RESPONSE = 23
 
 ELEMENT_REASON = 1
 ELEMENT_REASON_INFO = 2
@@ -109,19 +109,16 @@ class ProgramError(Exception):
 
 
 class CapfServer:
-    session_id = 0
-
     def __init__(self, port, timeout, capf_certificate_file):
         self.server_socket = None
 
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ssl_context.verify_mode = ssl.CERT_NONE
 
         try:
             ssl_context.load_cert_chain(capf_certificate_file)
         except (PermissionError, FileNotFoundError, IsADirectoryError) as error:
             raise ProgramError(f'{error.strerror}: {error.filename}')
-
-        ssl_context.verify_mode = ssl.CERT_NONE
 
         try:
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -187,18 +184,26 @@ class CapfConnection:
     issuer_certificate_file = None
     verify_certificate_files = []
     validity_days = 0
+    client_limit = 0
+    client_count = 0
+    session_id = 0
 
     def __init__(self, client_socket):
-        CapfServer.session_id += 1
-        session_id = CapfServer.session_id
+        CapfConnection.client_count += 1
+        CapfConnection.session_id += 1
 
+        self.session_id = CapfConnection.session_id
         self.client_socket = client_socket
-        self.session_id = session_id
 
     def __del__(self):
+        CapfConnection.client_count -= 1
         self.client_socket.close()
 
     def run(self):
+        if CapfConnection.client_limit and CapfConnection.client_count > CapfConnection.client_limit:
+            logging.info('Too many clients: %d of %d', CapfConnection.client_count, CapfConnection.client_limit)
+            return
+
         try:
             self.send_request(COMMAND_AUTH_REQUEST, {
                 ELEMENT_VERSION: PROTOCOL_VERSION,
@@ -620,7 +625,7 @@ class CapfConnection:
             logging.info('Key Algorithm: RSA')
             logging.info('Key Size %d', key_size)
 
-            self.send_request(COMMAND_KEY_GEN_REQUEST, {
+            self.send_request(COMMAND_KEY_GENERATE_REQUEST, {
                 ELEMENT_KEY_TYPE: KEY_TYPE_RSA,
                 ELEMENT_KEY_SIZE: key_size
             })
@@ -637,7 +642,7 @@ class CapfConnection:
             elif curve_name == 'secp521r1':
                 curve = CURVE_SECP521R1
 
-            self.send_request(COMMAND_KEY_GEN_REQUEST, {
+            self.send_request(COMMAND_KEY_GENERATE_REQUEST, {
                 ELEMENT_KEY_TYPE: KEY_TYPE_EC,
                 ELEMENT_CURVE: curve
             })
@@ -647,7 +652,7 @@ class CapfConnection:
         if command == COMMAND_REQUEST_IN_PROGRESS:
             command, elements = self.receive_response()
 
-        if command != COMMAND_KEY_GEN_RESPONSE:
+        if command != COMMAND_KEY_GENERATE_RESPONSE:
             raise ProgramError(f'Unexpected command: {command}')
 
         public_key = elements.get(ELEMENT_PUBLIC_KEY, None)
@@ -741,14 +746,14 @@ class CapfConnection:
 
         logging.info('Result: Installed certificate')
 
-        self.send_request(COMMAND_STORE_CERT_REQUEST, {
+        self.send_request(COMMAND_STORE_CERTIFICATE_REQUEST, {
             ELEMENT_CERTIFICATE_TYPE: CERTIFICATE_TYPE_LSC,
             ELEMENT_CERTIFICATE: certificate.public_bytes(serialization.Encoding.DER)
         })
 
         command, elements = self.receive_response()
 
-        if command != COMMAND_STORE_CERT_RESPONSE:
+        if command != COMMAND_STORE_CERTIFICATE_RESPONSE:
             raise ProgramError(f'Unexpected command: {command}')
 
         reason = elements.get(ELEMENT_REASON, -1)
@@ -759,10 +764,10 @@ class CapfConnection:
         self.send_request(COMMAND_END_SESSION, {ELEMENT_REASON: REASON_UPDATE_CERTIFICATE})
 
     def fetch_certificate(self, device_name, database):
-        self.send_request(COMMAND_FETCH_CERT_REQUEST, {})
+        self.send_request(COMMAND_FETCH_CERTIFICATE_REQUEST, {})
         command, elements = self.receive_response()
 
-        if command != COMMAND_FETCH_CERT_RESPONSE:
+        if command != COMMAND_FETCH_CERTIFICATE_RESPONSE:
             raise ProgramError(f'Unexpected command: {command}')
 
         reason = elements.get(ELEMENT_REASON, -1)
@@ -809,10 +814,10 @@ class CapfConnection:
         self.send_request(COMMAND_END_SESSION, {ELEMENT_REASON: REASON_NO_ACTION})
 
     def delete_certificate(self, device_name, database):
-        self.send_request(COMMAND_DELETE_CERT_REQUEST, {})
+        self.send_request(COMMAND_DELETE_CERTIFICATE_REQUEST, {})
         command, elements = self.receive_response()
 
-        if command != COMMAND_DELETE_CERT_RESPONSE:
+        if command != COMMAND_DELETE_CERTIFICATE_RESPONSE:
             raise ProgramError(f'Unexpected command: {command}')
 
         reason = elements.get(ELEMENT_REASON, -1)
@@ -842,8 +847,8 @@ class CapfConnection:
 
 def main():
     try:
-        short_options = 'p:t:A:i:d:v:H'
-        long_options = ['port=', 'timeout=', 'capf=', 'issuer=', 'days=', 'verify=', 'help']
+        short_options = 'p:t:A:i:d:v:L:H'
+        long_options = ['port=', 'timeout=', 'capf=', 'issuer=', 'days=', 'verify=', 'limit=', 'help']
 
         try:
             options, arguments = getopt.gnu_getopt(sys.argv[1:], short_options, long_options)
@@ -859,6 +864,7 @@ def main():
         issuer_certificate_file = None
         verify_certificate_files = []
         certificates_dir = None
+        client_limit = 0
         help = False
 
         for option, argument in options:
@@ -879,6 +885,10 @@ def main():
 
                 try:
                     timeout = int(timeout)
+
+                    if timeout < 1:
+                        raise ValueError
+
                 except ValueError:
                     raise ProgramError(f'Invalid timeout: {timeout}')
 
@@ -904,6 +914,18 @@ def main():
                 verify_certificate_file = argument
                 verify_certificate_files.append(verify_certificate_file)
 
+            elif option in ('-L', '--limit'):
+                client_limit = argument
+
+                try:
+                    client_limit = int(client_limit)
+
+                    if client_limit < 0:
+                        raise ValueError
+
+                except ValueError:
+                    raise ProgramError(f'Invalid limit: {client_limit}')
+
             elif option in ('-H', '--help'):
                 help = True
 
@@ -916,6 +938,7 @@ def main():
                   '  -p, --port PORT                  port CAPF server is listening on (default 3804)\n'
                   '  -t, --timeout TIMEOUT            connection timeout in seconds (default 10)\n'
                   '  -d, --days DAYS                  number of days the certificate will be valid (default 365)\n'
+                  '  -L, --limit LIMIT                concurrent client limit (default 0, no limit)\n'
                   '  -H, --help                       print this help and exit\n'
                   '\n'
                   'If no ISSUER-CERT-FILE is supplied CAPF-CERT-FILE will be used.\n'
@@ -944,6 +967,7 @@ def main():
         CapfConnection.issuer_certificate_file = issuer_certificate_file
         CapfConnection.verify_certificate_files = verify_certificate_files
         CapfConnection.validity_days = validity_days
+        CapfConnection.client_limit = client_limit
 
         capf_server = CapfServer(port, timeout, capf_certificate_file)
         capf_server.run()
