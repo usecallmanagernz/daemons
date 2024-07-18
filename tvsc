@@ -89,30 +89,26 @@ class TvsClient:
             self.socket.close()
 
     def send_request(self, command, elements):
-        request = bytearray(struct.pack('> B B B B I H', PROTOCOL_ID, PROTOCOL_VERSION, command, 0, self.session_id, 0))
+        request = bytes()
 
-        for tag, value in elements.items():
-            if tag == ELEMENT_DEVICE_NAME:
-                device_name = value
-                device_name = b'\x01' + device_name.encode('utf-8')
+        device_name = elements.get(ELEMENT_DEVICE_NAME, None)
 
-                request += struct.pack('> B H', ELEMENT_DEVICE_NAME, len(device_name))
-                request += device_name
+        if device_name is not None:
+            device_name = b'\x01' + device_name.encode('utf-8')
 
-            elif tag == ELEMENT_CERTIFICATE:
-                certificate = value
+            request += struct.pack('> B H', ELEMENT_DEVICE_NAME, len(device_name))
+            request += device_name
 
-                request += struct.pack('> B H', ELEMENT_CERTIFICATE, len(certificate))
-                request += certificate
+        certificate = elements.get(ELEMENT_CERTIFICATE, None)
 
-            else:
-                raise ProgramError(f'Unknown element tag: {tag}')
+        if certificate is not None:
+            request += struct.pack('> B H', ELEMENT_CERTIFICATE, len(certificate))
+            request += certificate
 
-        struct.pack_into('> H', request, 8, len(request) - 10)
-        self.socket.sendall(request)
+        self.socket.sendall(struct.pack('> B B B B I H', PROTOCOL_ID, PROTOCOL_VERSION, command, 0, self.session_id, len(request)) + request)
 
     def receive_response(self):
-        response = bytearray(self.socket.recv(10))
+        response = self.socket.recv(10)
 
         if not len(response):
             raise ProgramError('Server closed socket')
@@ -120,7 +116,7 @@ class TvsClient:
         if len(response) != 10:
             raise ProgramError('Invalid header length')
 
-        (protocol_id, version, command, session_id, length) = struct.unpack_from('> B B B x I H', response, 0)
+        (protocol_id, version, command, session_id, response_length) = struct.unpack_from('> B B B x I H', response, 0)
 
         if protocol_id != PROTOCOL_ID:
             raise ProgramError(f'Invalid protocol ID: {protocol_id}')
@@ -131,19 +127,21 @@ class TvsClient:
         if session_id != self.session_id:
             raise ProgramError(f'Mismatched session ID: {session_id}')
 
-        while len(response) < (length + 10):
-            response_chunk = self.socket.recv((length + 10) - len(response))
+        response = bytes()
+
+        while len(response) < response_length:
+            response_chunk = self.socket.recv(response_length - len(response))
 
             if not len(response_chunk):
                 break
 
             response += response_chunk
 
-        if len(response) != (length + 10):
+        if len(response) != response_length:
             raise ProgramError('Truncated response')
 
         elements = {}
-        index = 10
+        index = 0
 
         while index < len(response):
             (tag, length) = struct.unpack_from('> B H', response, index)

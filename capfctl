@@ -53,15 +53,15 @@ def set_device_operation(database, device_name, operation, authentication, passw
 
     if operation == 'install':
         if key_size:
-            print('Scheduled install on', device_name, 'with RSA', key_size, 'using', authentication)
+            print('Scheduled install new certificate on', device_name, 'with RSA', key_size, 'using', authentication)
         elif curve_name:
-            print('Scheduled install on', device_name, 'with EC', curve_name, 'using', authentication)
+            print('Scheduled install new certificate on', device_name, 'with EC', curve_name, 'using', authentication)
 
     elif operation == 'fetch':
-        print('Scheduled fetch on', device_name, 'using', authentication)
+        print('Scheduled fetch certificate on', device_name, 'using', authentication)
 
     elif operation == 'delete':
-        print('Scheduled delete on', device_name, 'using', authentication)
+        print('Scheduled delete certificate on', device_name, 'using', authentication)
 
     elif operation == 'none':
         print('Scheduled no operation', device_name, 'using', authentication)

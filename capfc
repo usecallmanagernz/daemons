@@ -12,6 +12,7 @@ import traceback
 import socket
 import ssl
 import struct
+import ctypes
 
 from cryptography import x509
 from cryptography.hazmat import backends
@@ -126,74 +127,75 @@ class CapfClient:
             self.socket.close()
 
     def send_response(self, command, elements):
-        response = bytearray(struct.pack('> B B I H', PROTOCOL_ID, command, self.session_id, 0))
+        response = bytes()
 
-        for tag, value in elements.items():
-            if tag == ELEMENT_REASON:
-                reason = value
-                response += struct.pack('> B H B', ELEMENT_REASON, 1, reason)
+        reason = elements.get(ELEMENT_REASON, None)
 
-            elif tag == ELEMENT_CERTIFICATE_TYPE:
-                certificate_type = value
-                response += struct.pack('> B H B', ELEMENT_CERTIFICATE_TYPE, 1, certificate_type)
+        if reason is not None:
+            response += struct.pack('> B H B', ELEMENT_REASON, 1, reason)
 
-            elif tag == ELEMENT_CERTIFICATE:
-                certificate = value
-                certificate = struct.pack('> B H B B', 1, len(certificate) + 2, 0, CERTIFICATE_TYPE_LSC) + certificate
+        certificate_type = elements.get(ELEMENT_CERTIFICATE_TYPE, None)
 
-                response += struct.pack('> B H', ELEMENT_CERTIFICATE, len(certificate))
-                response += certificate
+        if certificate_type is not None:
+            response += struct.pack('> B H B', ELEMENT_CERTIFICATE_TYPE, 1, certificate_type)
 
-            elif tag == ELEMENT_SIGNED_DATA:
-                signed_data = value
+        certificate = elements.get(ELEMENT_CERTIFICATE, None)
 
-                response += struct.pack('> B H', ELEMENT_SIGNED_DATA, len(signed_data))
-                response += signed_data
+        if certificate is not None:
+            certificate = struct.pack('> B H B B', 1, len(certificate) + 2, 0, CERTIFICATE_TYPE_LSC) + certificate
 
-            elif tag == ELEMENT_VERSION:
-                version = value
-                response += struct.pack('> B H B', ELEMENT_VERSION, 1, version)
+            response += struct.pack('> B H', ELEMENT_CERTIFICATE, len(certificate))
+            response += certificate
 
-            elif tag == ELEMENT_PASSWORD:
-                password = value
-                password = password.encode('utf-8') + b'\x00'
+        signed_data = elements.get(ELEMENT_SIGNED_DATA, None)
 
-                response += struct.pack('> B H', ELEMENT_PASSWORD, len(password))
-                response += password
+        if signed_data is not None:
+            response += struct.pack('> B H', ELEMENT_SIGNED_DATA, len(signed_data))
+            response += signed_data
 
-            elif tag == ELEMENT_DEVICE_NAME:
-                device_name = value
-                device_name = device_name.encode('utf-8') + b'\x00'
+        version = elements.get(ELEMENT_VERSION, None)
 
-                response += struct.pack('> B H', ELEMENT_DEVICE_NAME, len(device_name))
-                response += device_name
+        if version is not None:
+            response += struct.pack('> B H B', ELEMENT_VERSION, 1, version)
 
-            elif tag == ELEMENT_SUDI_DATA:
-                sudi_data = value
+        password = elements.get(ELEMENT_PASSWORD, None)
 
-                response += struct.pack('> B H', ELEMENT_SUDI_DATA, len(sudi_data))
-                response += sudi_data
+        if password is not None:
+            password = password.encode('utf-8') + b'\x00'
 
-            elif tag == ELEMENT_PUBLIC_KEY:
-                public_key = value
+            response += struct.pack('> B H', ELEMENT_PASSWORD, len(password))
+            response += password
 
-                response += struct.pack('> B H', ELEMENT_PUBLIC_KEY, len(public_key))
-                response += public_key
+        device_name = elements.get(ELEMENT_DEVICE_NAME, None)
 
-            elif tag == ELEMENT_SHA2_SIGNED_DATA:
-                sha2_signed_data = value
+        if device_name is not None:
+            device_name = device_name.encode('utf-8') + b'\x00'
 
-                response += struct.pack('> B H', ELEMENT_SHA2_SIGNED_DATA, len(sha2_signed_data))
-                response += sha2_signed_data
+            response += struct.pack('> B H', ELEMENT_DEVICE_NAME, len(device_name))
+            response += device_name
 
-            else:
-                raise ProgramError(f'Unknown element tag: {tag}')
+        sudi_data = elements.get(ELEMENT_SUDI_DATA, None)
 
-        struct.pack_into('> H', response, 6, len(response) - 8)
-        self.socket.sendall(response)
+        if sudi_data is not None:
+            response += struct.pack('> B H', ELEMENT_SUDI_DATA, len(sudi_data))
+            response += sudi_data
+
+        public_key = elements.get(ELEMENT_PUBLIC_KEY, None)
+
+        if public_key is not None:
+            response += struct.pack('> B H', ELEMENT_PUBLIC_KEY, len(public_key))
+            response += public_key
+
+        sha2_signed_data = elements.get(ELEMENT_SHA2_SIGNED_DATA, None)
+
+        if sha2_signed_data is not None:
+            response += struct.pack('> B H', ELEMENT_SHA2_SIGNED_DATA, len(sha2_signed_data))
+            response += sha2_signed_data
+
+        self.socket.sendall(struct.pack('> B B I H', PROTOCOL_ID, command, self.session_id, len(response)) + response)
 
     def receive_request(self):
-        request = bytearray(self.socket.recv(8))
+        request = self.socket.recv(8)
 
         if not len(request):
             raise ProgramError('Server closed socket')
@@ -201,7 +203,7 @@ class CapfClient:
         if len(request) != 8:
             raise ProgramError('Invalid header length')
 
-        (protocol_id, command, session_id, length) = struct.unpack('> B B I H', request)
+        (protocol_id, command, session_id, request_length) = struct.unpack('> B B I H', request)
 
         if protocol_id != PROTOCOL_ID:
             raise ProgramError(f'Invalid protocol ID: {protocol_id}')
@@ -211,19 +213,21 @@ class CapfClient:
         elif session_id != self.session_id:
             raise ProgramError(f'Mismatched session ID: {session_id}')
 
-        while len(request) < (length + 8):
-            request_chunk = self.socket.recv((length + 8) - len(request))
+        request = bytes()
+
+        while len(request) < request_length:
+            request_chunk = self.socket.recv(request_length - len(request))
 
             if not len(request_chunk):
                 break
 
             request += request_chunk
 
-        if len(request) != (length + 8):
+        if len(request) != request_length:
             raise ProgramError('Truncated request')
 
         elements = {}
-        index = 8
+        index = 0
 
         while index < len(request):
             (tag, length) = struct.unpack_from('> B H', request, index)
@@ -245,7 +249,7 @@ class CapfClient:
 
             elif tag == ELEMENT_CERTIFICATE:
                 certificate = request[index:index + length]
-                certificate = bytes(certificate[5:])
+                certificate = certificate[5:]
 
                 elements[ELEMENT_CERTIFICATE] = certificate
 
@@ -365,36 +369,10 @@ class CapfClient:
         auth_data = device_name.encode('utf-8') + b'\x00' + certificate
 
         if isinstance(private_key, rsa.RSAPrivateKey):
-            hash = hashes.Hash(hashes.SHA1(), backends.default_backend())
-            hash.update(auth_data)
-            sha1_hash = hash.finalize()
+            rsa_key = RSAKeyEncrypt(private_key)
 
-            hash = hashes.Hash(hashes.SHA512(), backends.default_backend())
-            hash.update(auth_data)
-            sha2_hash = hash.finalize()
-
-            backend = backends.default_backend()
-
-            private_key = backend._lib.EVP_PKEY_get1_RSA(private_key._evp_pkey)
-            private_key = backend._ffi.gc(private_key, backend._lib.RSA_free)
-
-            encrypted = backend._ffi.new('unsigned char[]', backend._lib.RSA_size(private_key))
-
-            if backend._lib.RSA_private_encrypt(len(sha1_hash), sha1_hash, encrypted, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
-                error = backend._lib.ERR_get_error()
-                backend._lib.ERR_clear_error()
-
-                raise ProgramError(f'RSA private-encrypt: {error}')
-
-            signed_data = bytes(backend._ffi.buffer(encrypted))
-
-            if backend._lib.RSA_private_encrypt(len(sha2_hash), sha2_hash, encrypted, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
-                error = backend._lib.ERR_get_error()
-                backend._lib.ERR_clear_error()
-
-                raise ProgramError(f'SHA2 RSA private-encrypt: {error}')
-
-            sha2_signed_data = bytes(backend._ffi.buffer(encrypted))
+            signed_data = rsa_key.encrypt(auth_data, hashes.SHA1())
+            sha2_signed_data = rsa_key.encrypt(auth_data, hashes.SHA512())
 
         elif isinstance(private_key, ec.EllipticCurvePrivateKey):
             signed_data = private_key.sign(auth_data, ec.ECDSA(hashes.SHA1()))
@@ -428,46 +406,22 @@ class CapfClient:
             raise ProgramError(f'No private-key in file: {sudi_certificate_file}')
 
         if not isinstance(private_key, rsa.RSAPrivateKey):
-            raise ProgramError(f'No RSA private-key in file: {sudi_certificate_file}')
+            return None
 
         certificate = certificate.public_bytes(serialization.Encoding.DER)
+
+        # Cisco's CAPF server uses whatever the host's endianess is so the session ID is encoded as little-endian
         auth_data = struct.pack('< I', self.session_id) + certificate
 
-        sudi_data = bytearray()
+        rsa_key = RSAKeyEncrypt(private_key)
+
+        signed_data = rsa_key.encrypt(auth_data, hashes.SHA1())
+        sha2_signed_data = rsa_key.encrypt(auth_data, hashes.SHA512())
+
+        sudi_data = bytes()
 
         sudi_data += struct.pack('> B H', 0, len(certificate))
         sudi_data += certificate
-
-        hash = hashes.Hash(hashes.SHA1(), backends.default_backend())
-        hash.update(auth_data)
-        sha1_hash = hash.finalize()
-
-        hash = hashes.Hash(hashes.SHA512(), backends.default_backend())
-        hash.update(auth_data)
-        sha2_hash = hash.finalize()
-
-        backend = backends.default_backend()
-
-        private_key = backend._lib.EVP_PKEY_get1_RSA(private_key._evp_pkey)
-        private_key = backend._ffi.gc(private_key, backend._lib.RSA_free)
-
-        encrypted = backend._ffi.new('unsigned char[]', backend._lib.RSA_size(private_key))
-
-        if backend._lib.RSA_private_encrypt(len(sha1_hash), sha1_hash, encrypted, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
-            error = backend._lib.ERR_get_error()
-            backend._lib.ERR_clear_error()
-
-            raise ProgramError(f'SUDI RSA private-encrypt: {error}')
-
-        signed_data = bytes(backend._ffi.buffer(encrypted))
-
-        if backend._lib.RSA_private_encrypt(len(sha2_hash), sha2_hash, encrypted, private_key, backend._lib.RSA_PKCS1_PADDING) == -1:
-            error = backend._lib.ERR_get_error()
-            backend._lib.ERR_clear_error()
-
-            raise ProgramError(f'SUDI SHA2 RSA private-encrypt: {error}')
-
-        sha2_signed_data = bytes(backend._ffi.buffer(encrypted))
 
         sudi_data += struct.pack('> B H', HASH_SHA1, len(signed_data))
         sudi_data += signed_data
@@ -592,6 +546,71 @@ class CapfClient:
 
         if command != COMMAND_END_SESSION:
             raise ProgramError(f'Unexpected command: {command}')
+
+
+class RSAKeyEncrypt:
+    # The cryptography module no longer exports deprecated RSA methods so they have to be imported from libcrypto manually
+    libcrypto = ctypes.cdll.LoadLibrary("libcrypto.so")
+
+    libcrypto.ERR_get_error.argtypes = []
+    libcrypto.ERR_get_error.restype = ctypes.c_long
+
+    libcrypto.ERR_error_string.argtypes = [ctypes.c_long, ctypes.c_char_p]
+    libcrypto.ERR_error_string.restype = ctypes.c_char_p
+
+    libcrypto.d2i_RSAPrivateKey.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)), ctypes.c_long]
+    libcrypto.d2i_RSAPrivateKey.restype = ctypes.c_void_p
+
+    libcrypto.RSA_free.argtypes = [ctypes.c_void_p]
+    libcrypto.RSA_free.restype = None
+
+    libcrypto.RSA_size.argtypes = [ctypes.c_void_p]
+    libcrypto.RSA_size.restype = ctypes.c_int
+
+    libcrypto.RSA_private_encrypt.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_ubyte), ctypes.POINTER(ctypes.c_ubyte), ctypes.c_void_p, ctypes.c_int]
+    libcrypto.RSA_private_encrypt.restype = ctypes.c_int
+
+    libcrypto.RSA_PKCS1_PADDING = 1
+
+    def __init__(self, private_key):
+        private_key = private_key.private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption())
+        private_key = (ctypes.c_ubyte * len(private_key)).from_buffer_copy(private_key)
+
+        self.rsa_key = self.libcrypto.d2i_RSAPrivateKey(ctypes.byref(ctypes.c_void_p()),
+                                                        ctypes.byref(ctypes.cast(private_key, ctypes.POINTER(ctypes.c_ubyte))),
+                                                        len(private_key))
+
+        if self.rsa_key is None:
+            error = self.libcrypto.ERR_get_error()
+            error = bytes(self.libcrypto.ERR_error_string(error, ctypes.c_char_p())).decode('utf-8')
+
+            raise ValueError(error)
+
+    def __del__(self):
+        if self.rsa_key is not None:
+            self.libcrypto.RSA_free(self.rsa_key)
+
+    def encrypt(self, auth_data, hash_algorithm):
+        hash = hashes.Hash(hash_algorithm, backends.default_backend())
+        hash.update(auth_data)
+        auth_data_hash = hash.finalize()
+
+        auth_data_hash = (ctypes.c_ubyte * len(auth_data_hash)).from_buffer_copy(auth_data_hash)
+        signed_data = (ctypes.c_ubyte * self.libcrypto.RSA_size(self.rsa_key))()
+
+        if self.libcrypto.RSA_private_encrypt(len(auth_data_hash),
+                                              ctypes.cast(auth_data_hash, ctypes.POINTER(ctypes.c_ubyte)),
+                                              ctypes.cast(signed_data, ctypes.POINTER(ctypes.c_ubyte)),
+                                              self.rsa_key,
+                                              self.libcrypto.RSA_PKCS1_PADDING) == -1:
+            error = self.libcrypto.ERR_get_error()
+            error = bytes(self.libcrypto.ERR_error_string(error, ctypes.c_char_p())).decode('utf-8')
+
+            raise ValueError(error)
+
+        signed_data = bytes(signed_data)
+
+        return signed_data
 
 
 def main():

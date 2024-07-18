@@ -17,6 +17,7 @@ import signal
 import logging
 from datetime import datetime, timezone, timedelta
 import struct
+import ctypes
 import binascii
 import sqlite3
 
@@ -166,9 +167,7 @@ class CapfServer:
                         logging.error('%s', error.strerror)
                         continue
 
-                    capf_connection = CapfConnection(client_socket)
-
-                    thread = threading.Thread(daemon = True, name = f'{ip_address}:{port}', target = capf_connection.run)
+                    thread = threading.Thread(daemon = True, name = f'{ip_address}:{port}', target = self.client_connection, args = (client_socket,))
                     thread.start()
 
         except InterruptedError:
@@ -176,6 +175,10 @@ class CapfServer:
 
     def shutdown(self, signum, frame):
         raise InterruptedError
+
+    def client_connection(self, client_socket):
+        capf_connection = CapfConnection(client_socket)
+        capf_connection.run()
 
 
 class CapfConnection:
@@ -281,52 +284,56 @@ class CapfConnection:
             logging.error('%s', traceback.format_exc())
 
     def send_request(self, command, elements):
-        request = bytearray(struct.pack('> B B I H', PROTOCOL_ID, command, self.session_id, 0))
+        request = bytes()
 
-        for tag, value in elements.items():
-            if tag == ELEMENT_REASON:
-                reason = value
-                request += struct.pack('> B H B', ELEMENT_REASON, 1, reason)
+        reason = elements.get(ELEMENT_REASON, None)
 
-            elif tag == ELEMENT_CERTIFICATE_TYPE:
-                certificate_type = value
-                request += struct.pack('> B H B', ELEMENT_CERTIFICATE_TYPE, 1, certificate_type)
+        if reason is not None:
+            request += struct.pack('> B H B', ELEMENT_REASON, 1, reason)
 
-            elif tag == ELEMENT_CERTIFICATE:
-                certificate = value
-                certificate = struct.pack('> B H B B', 1, len(certificate) + 2, 0, CERTIFICATE_TYPE_LSC) + certificate
+        certificate_type = elements.get(ELEMENT_CERTIFICATE_TYPE, None)
 
-                request += struct.pack('> B H', ELEMENT_CERTIFICATE, len(certificate))
-                request += certificate
+        if certificate_type is not None:
+            request += struct.pack('> B H B', ELEMENT_CERTIFICATE_TYPE, 1, certificate_type)
 
-            elif tag == ELEMENT_VERSION:
-                version = value
-                request += struct.pack('> B H B', ELEMENT_VERSION, 1, version)
+        certificate = elements.get(ELEMENT_CERTIFICATE, None)
 
-            elif tag == ELEMENT_AUTH_TYPE:
-                auth_type = value
-                request += struct.pack('> B H B', ELEMENT_AUTH_TYPE, 1, auth_type)
+        if certificate is not None:
+            certificate = struct.pack('> B H B B', 1, len(certificate) + 2, 0, CERTIFICATE_TYPE_LSC) + certificate
 
-            elif tag == ELEMENT_KEY_SIZE:
-                key_size = value
-                request += struct.pack('> B H H', ELEMENT_KEY_SIZE, 2, key_size)
+            request += struct.pack('> B H', ELEMENT_CERTIFICATE, len(certificate))
+            request += certificate
 
-            elif tag == ELEMENT_KEY_TYPE:
-                key_type = value
-                request += struct.pack('> B H B', ELEMENT_KEY_TYPE, 1, key_type)
+        version = elements.get(ELEMENT_VERSION, None)
 
-            elif tag == ELEMENT_CURVE:
-                curve = value
-                request += struct.pack('> B H B', ELEMENT_CURVE, 1, curve)
+        if version is not None:
+            request += struct.pack('> B H B', ELEMENT_VERSION, 1, version)
 
-            else:
-                raise ProgramError(f'Unknown element tag: {tag}')
+        auth_type = elements.get(ELEMENT_AUTH_TYPE, None)
 
-        struct.pack_into('> H', request, 6, len(request) - 8)
-        self.client_socket.sendall(request)
+        if auth_type is not None:
+            request += struct.pack('> B H B', ELEMENT_AUTH_TYPE, 1, auth_type)
+
+        key_size = elements.get(ELEMENT_KEY_SIZE, None)
+
+        if key_size is not None:
+            request += struct.pack('> B H H', ELEMENT_KEY_SIZE, 2, key_size)
+
+        key_type = elements.get(ELEMENT_KEY_TYPE, None)
+
+        if key_type is not None:
+            request += struct.pack('> B H B', ELEMENT_KEY_TYPE, 1, key_type)
+
+        curve = elements.get(ELEMENT_CURVE, None)
+
+        if curve is not None:
+            request += struct.pack('> B H B', ELEMENT_CURVE, 1, curve)
+
+        # Do not split this into two sendall calls as that causes the phone's CAPF client to stall while reading the response
+        self.client_socket.sendall(struct.pack('> B B I H', PROTOCOL_ID, command, self.session_id, len(request)) + request)
 
     def receive_response(self):
-        response = bytearray(self.client_socket.recv(8))
+        response = self.client_socket.recv(8)
 
         if not len(response):
             raise ProgramError('Client closed socket')
@@ -334,7 +341,7 @@ class CapfConnection:
         if len(response) != 8:
             raise ProgramError('Invalid header length')
 
-        (protocol_id, command, session_id, length) = struct.unpack('> B B I H', response)
+        (protocol_id, command, session_id, response_length) = struct.unpack('> B B I H', response)
 
         if protocol_id != PROTOCOL_ID:
             raise ProgramError(f'Invalid protocol ID: {protocol_id}')
@@ -342,19 +349,21 @@ class CapfConnection:
         if session_id != self.session_id:
             raise ProgramError(f'Mismatched session ID: {session_id}')
 
-        while len(response) < (length + 8):
-            response_chunk = self.client_socket.recv((length + 8) - len(response))
+        response = bytes()
+
+        while len(response) < response_length:
+            response_chunk = self.client_socket.recv(response_length - len(response))
 
             if not len(response_chunk):
                 break
 
             response += response_chunk
 
-        if len(response) != (length + 8):
+        if len(response) != response_length:
             raise ProgramError('Truncated response')
 
         elements = {}
-        index = 8
+        index = 0
 
         while index < len(response):
             (tag, length) = struct.unpack_from('> B H', response, index)
@@ -376,13 +385,13 @@ class CapfConnection:
 
             elif tag == ELEMENT_CERTIFICATE:
                 certificate = response[index:index + length]
-                certificate = bytes(certificate[5:])
+                certificate = certificate[5:]
 
                 elements[ELEMENT_CERTIFICATE] = certificate
 
             elif tag == ELEMENT_SIGNED_DATA:
                 signed_data = response[index:index + length]
-                elements[ELEMENT_SIGNED_DATA] = bytes(signed_data)
+                elements[ELEMENT_SIGNED_DATA] = signed_data
 
             elif tag == ELEMENT_VERSION:
                 version = response[index]
@@ -402,15 +411,15 @@ class CapfConnection:
 
             elif tag == ELEMENT_PUBLIC_KEY:
                 public_key = response[index:index + length]
-                elements[ELEMENT_PUBLIC_KEY] = bytes(public_key)
+                elements[ELEMENT_PUBLIC_KEY] = public_key
 
             elif tag == ELEMENT_SUDI_DATA:
                 sudi_data = response[index:index + length]
-                elements[ELEMENT_SUDI_DATA] = bytes(sudi_data)
+                elements[ELEMENT_SUDI_DATA] = sudi_data
 
             elif tag == ELEMENT_SHA2_SIGNED_DATA:
                 sha2_signed_data = response[index:index + length]
-                elements[ELEMENT_SHA2_SIGNED_DATA] = bytes(sha2_signed_data)
+                elements[ELEMENT_SHA2_SIGNED_DATA] = sha2_signed_data
 
             else:
                 raise ProgramError(f'Unknown element tag: {tag}')
@@ -490,44 +499,17 @@ class CapfConnection:
         auth_data = device_name.encode('utf-8') + b'\x00' + certificate.public_bytes(serialization.Encoding.DER)
 
         if isinstance(public_key, rsa.RSAPublicKey):
-            hash = hashes.Hash(hashes.SHA1(), backends.default_backend())
-            hash.update(auth_data)
-            sha1_hash = hash.finalize()
+            rsa_key = RSAKeyDecrypt(public_key)
 
-            hash = hashes.Hash(hashes.SHA512(), backends.default_backend())
-            hash.update(auth_data)
-            sha2_hash = hash.finalize()
-
-            backend = backends.default_backend()
-
-            public_key = backend._lib.EVP_PKEY_get1_RSA(public_key._evp_pkey)
-            public_key = backend._ffi.gc(public_key, backend._lib.RSA_free)
-
-            decrypted = backend._ffi.new('unsigned char[]', backend._lib.RSA_size(public_key))
-
-            if backend._lib.RSA_public_decrypt(len(signed_data), signed_data, decrypted, public_key, backend._lib.RSA_PKCS1_PADDING) == -1:
-                error = backend._lib.ERR_get_error()
-                backend._lib.ERR_clear_error()
-
-                raise ProgramError(f'RSA public-decrypt: {error}')
-
-            auth_data_hash = bytes(decrypted)
-            auth_data_hash = auth_data_hash[:len(sha1_hash)]
-
-            if sha1_hash != auth_data_hash:
+            try:
+                rsa_key.decrypt(signed_data, auth_data, hashes.SHA1())
+            except ValueError:
                 raise ProgramError('Invalid RSA signed-data')
 
-            if backend._lib.RSA_public_decrypt(len(sha2_signed_data), sha2_signed_data, decrypted, public_key, backend._lib.RSA_PKCS1_PADDING) == -1:
-                error = backend._lib.ERR_get_error()
-                backend._lib.ERR_clear_error()
-
-                raise ProgramError(f'RSA SHA2 public-decrypt: {error}')
-
-            auth_data_hash = bytes(decrypted)
-            auth_data_hash = auth_data_hash[:len(sha2_hash)]
-
-            if sha2_hash != auth_data_hash:
-                raise ProgramError('Invalid SHA2 RSA signed-data')
+            try:
+                rsa_key.decrypt(sha2_signed_data, auth_data, hashes.SHA512())
+            except ValueError:
+                raise ProgramError('Invalid RSA SHA2 signed-data')
 
         elif isinstance(public_key, ec.EllipticCurvePublicKey):
             try:
@@ -542,7 +524,7 @@ class CapfConnection:
 
     def verify_sudi_data(self, sudi_data):
         if sudi_data is None:
-            raise ProgramError('No SUDI data')
+            return
 
         sudi_index = 0
 
@@ -564,6 +546,9 @@ class CapfConnection:
         sha2_signed_data = sudi_data[sudi_index:sudi_index + sudi_length]
         sudi_index += sudi_length
 
+        if hash_algorithm != HASH_SHA512:
+            raise ProgramError(f'Invalid SHA2 hash-algorithm: {hash_algorithm}')
+
         try:
             certificate = x509.load_der_x509_certificate(certificate, backends.default_backend())
         except ValueError:
@@ -572,58 +557,29 @@ class CapfConnection:
         public_key = certificate.public_key()
 
         if not isinstance(public_key, rsa.RSAPublicKey):
-            raise ProgramError('No RSA public-key in SUDI certificate')
-
-        if hash_algorithm != HASH_SHA512:
-            raise ProgramError(f'Invalid SHA2 hash-algorithm: {hash_algorithm}')
+            return
 
         self.verify_certificate(certificate, 'SUDI')
 
+        # Cisco's CAPF server uses whatever the host's endianess is so the session ID is encoded as little-endian
         auth_data = struct.pack('< I', self.session_id) + certificate.public_bytes(serialization.Encoding.DER)
 
-        hash = hashes.Hash(hashes.SHA1(), backends.default_backend())
-        hash.update(auth_data)
-        sha1_hash = hash.finalize()
+        rsa_key = RSAKeyDecrypt(public_key)
 
-        hash = hashes.Hash(hashes.SHA512(), backends.default_backend())
-        hash.update(auth_data)
-        sha2_hash = hash.finalize()
-
-        backend = backends.default_backend()
-
-        public_key = backend._lib.EVP_PKEY_get1_RSA(public_key._evp_pkey)
-        public_key = backend._ffi.gc(public_key, backend._lib.RSA_free)
-
-        decrypted = backend._ffi.new('unsigned char[]', backend._lib.RSA_size(public_key))
-
-        if backend._lib.RSA_public_decrypt(len(signed_data), signed_data, decrypted, public_key, backend._lib.RSA_PKCS1_PADDING) == -1:
-            error = backend._lib.ERR_get_error()
-            backend._lib.ERR_clear_error()
-
-            raise ProgramError(f'RSA public-decrypt: {error}')
-
-        auth_data_hash = bytes(decrypted)
-        auth_data_hash = auth_data_hash[:len(sha1_hash)]
-
-        if sha1_hash != auth_data_hash:
+        try:
+            rsa_key.decrypt(signed_data, auth_data, hashes.SHA1())
+        except ValueError:
             raise ProgramError('Invalid SUDI RSA signed-data')
 
-        if backend._lib.RSA_public_decrypt(len(sha2_signed_data), sha2_signed_data, decrypted, public_key, backend._lib.RSA_PKCS1_PADDING) == -1:
-            error = backend._lib.ERR_get_error()
-            backend._lib.ERR_clear_error()
-
-            raise ProgramError(f'SUDI SHA2 RSA public-decrypt: {error}')
-
-        auth_data_hash = bytes(decrypted)
-        auth_data_hash = auth_data_hash[:len(sha2_hash)]
-
-        if sha2_hash != auth_data_hash:
-            raise ProgramError('Invalid SUDI SHA2 RSA signed-data')
+        try:
+            rsa_key.decrypt(sha2_signed_data, auth_data, hashes.SHA512())
+        except ValueError:
+            raise ProgramError('Invalid SUDI RSA SHA2 signed-data')
 
     def install_certificate(self, device_name, key_size, curve_name, database):
         if key_size:
             logging.info('Key Algorithm: RSA')
-            logging.info('Key Size %d', key_size)
+            logging.info('Key Size: %d', key_size)
 
             self.send_request(COMMAND_KEY_GENERATE_REQUEST, {
                 ELEMENT_KEY_TYPE: KEY_TYPE_RSA,
@@ -845,6 +801,73 @@ class CapfConnection:
         self.send_request(COMMAND_END_SESSION, {ELEMENT_REASON: REASON_UPDATE_CERTIFICATE})
 
 
+class RSAKeyDecrypt:
+    # The cryptography module no longer exports deprecated RSA methods so they have to be imported from libcrypto manually
+    libcrypto = ctypes.cdll.LoadLibrary("libcrypto.so")
+
+    libcrypto.ERR_get_error.argtypes = []
+    libcrypto.ERR_get_error.restype = ctypes.c_long
+
+    libcrypto.ERR_error_string.argtypes = [ctypes.c_long, ctypes.c_char_p]
+    libcrypto.ERR_error_string.restype = ctypes.c_char_p
+
+    libcrypto.d2i_RSAPublicKey.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)), ctypes.c_long]
+    libcrypto.d2i_RSAPublicKey.restype = ctypes.c_void_p
+
+    libcrypto.RSA_free.argtypes = [ctypes.c_void_p]
+    libcrypto.RSA_free.restype = None
+
+    libcrypto.RSA_size.argtypes = [ctypes.c_void_p]
+    libcrypto.RSA_size.restype = ctypes.c_int
+
+    libcrypto.RSA_public_decrypt.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_ubyte), ctypes.POINTER(ctypes.c_ubyte), ctypes.c_void_p, ctypes.c_int]
+    libcrypto.RSA_public_decrypt.restype = ctypes.c_int
+
+    libcrypto.RSA_PKCS1_PADDING = 1
+
+    def __init__(self, public_key):
+        public_key = public_key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.PKCS1)
+        public_key = (ctypes.c_ubyte * len(public_key)).from_buffer_copy(public_key)
+
+        self.rsa_key = self.libcrypto.d2i_RSAPublicKey(ctypes.byref(ctypes.c_void_p()),
+                                                       ctypes.byref(ctypes.cast(public_key, ctypes.POINTER(ctypes.c_ubyte))),
+                                                       len(public_key))
+
+        if self.rsa_key is None:
+            error = self.libcrypto.ERR_get_error()
+            error = bytes(self.libcrypto.ERR_error_string(error, ctypes.c_char_p())).decode('utf-8')
+
+            raise ValueError(error)
+
+    def __del__(self):
+        if self.rsa_key is not None:
+            self.libcrypto.RSA_free(self.rsa_key)
+
+    def decrypt(self, signed_data, auth_data, hash_algorithm):
+        hash = hashes.Hash(hash_algorithm, backends.default_backend())
+        hash.update(auth_data)
+        auth_data_hash = hash.finalize()
+
+        signed_data = (ctypes.c_ubyte * len(signed_data)).from_buffer_copy(signed_data)
+        signed_data_hash = (ctypes.c_ubyte * self.libcrypto.RSA_size(self.rsa_key))()
+
+        if self.libcrypto.RSA_public_decrypt(len(signed_data),
+                                             ctypes.cast(signed_data, ctypes.POINTER(ctypes.c_ubyte)),
+                                             ctypes.cast(signed_data_hash, ctypes.POINTER(ctypes.c_ubyte)),
+                                             self.rsa_key,
+                                             self.libcrypto.RSA_PKCS1_PADDING) == -1:
+            error = self.libcrypto.ERR_get_error()
+            error = bytes(self.libcrypto.ERR_error_string(error, ctypes.c_char_p())).decode('utf-8')
+
+            raise ValueError(error)
+
+        signed_data_hash = bytes(signed_data_hash)
+        signed_data_hash = signed_data_hash[:len(auth_data_hash)]
+
+        if signed_data_hash != auth_data_hash:
+            raise ValueError('Mismatch between signed-hash and auth-hash')
+
+
 def main():
     try:
         short_options = 'p:t:A:i:d:v:L:H'
@@ -935,6 +958,7 @@ def main():
                   '\n'
                   '  -A, --capf CAPF-CERT-FILE        CAPF certificate\n'
                   '  -i, --issuer ISSUER-CERT-FILE    issuing (CA) certificate that will used for signing\n'
+                  '  -v, --verify VERIFY-CERT-FILE    additional certificate to use for verification, can be specified more than once\n'
                   '  -p, --port PORT                  port CAPF server is listening on (default 3804)\n'
                   '  -t, --timeout TIMEOUT            connection timeout in seconds (default 10)\n'
                   '  -d, --days DAYS                  number of days the certificate will be valid (default 365)\n'

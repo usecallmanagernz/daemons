@@ -113,9 +113,7 @@ class TvsServer:
                         logging.error('Error: %s', error.strerror)
                         continue
 
-                    tvs_connection = TvsConnection(client_socket)
-
-                    thread = threading.Thread(daemon = True, name = f'{ip_address}:{port}', target = tvs_connection.run)
+                    thread = threading.Thread(daemon = True, name = f'{ip_address}:{port}', target = self.client_connection, args = (client_socket,))
                     thread.start()
 
         except InterruptedError:
@@ -123,6 +121,10 @@ class TvsServer:
 
     def shutdown(self, signum, frame):
         raise InterruptedError
+
+    def client_connection(self, client_socket):
+        tvs_connection = TvsConnection(client_socket)
+        tvs_connection.run()
 
 
 class TvsConnection:
@@ -163,31 +165,28 @@ class TvsConnection:
             logging.error('%s', traceback.format_exc())
 
     def send_response(self, command, elements):
-        response = bytearray(struct.pack('> B B B B I H', PROTOCOL_ID, PROTOCOL_VERSION, command, 0, self.session_id, 0))
+        response = bytes()
 
-        for tag, value in elements.items():
-            if tag == ELEMENT_STATUS:
-                status = value
-                response += struct.pack('> B H B', ELEMENT_STATUS, 1, status)
+        status = elements.get(ELEMENT_STATUS, None)
 
-            elif tag == ELEMENT_ROLES:
-                roles = value
+        if status is not None:
+            response += struct.pack('> B H B', ELEMENT_STATUS, 1, status)
 
-                response += struct.pack('> B H', ELEMENT_ROLES, len(roles))
-                response += roles
+        roles = elements.get(ELEMENT_ROLES, None)
 
-            elif tag == ELEMENT_TTL:
-                ttl = value
-                response += struct.pack('> B H I', ELEMENT_TTL, 4, ttl)
+        if roles is not None:
+            response += struct.pack('> B H', ELEMENT_ROLES, len(roles))
+            response += roles
 
-            else:
-                raise ProgramError(f'Unknown element tag: {tag}')
+        ttl = elements.get(ELEMENT_TTL, None)
 
-        struct.pack_into('> H', response, 8, len(response) - 10)
-        self.client_socket.sendall(response)
+        if ttl is not None:
+            response += struct.pack('> B H I', ELEMENT_TTL, 4, ttl)
+
+        self.client_socket.sendall(struct.pack('> B B B B I H', PROTOCOL_ID, PROTOCOL_VERSION, command, 0, self.session_id, len(response)) + response)
 
     def receive_request(self):
-        request = bytearray(self.client_socket.recv(10))
+        request = self.client_socket.recv(10)
 
         if not len(request):
             raise ProgramError('Client closed socket')
@@ -195,7 +194,7 @@ class TvsConnection:
         if len(request) != 10:
             raise ProgramError('Invalid header length')
 
-        (protocol_id, version, command, session_id, length) = struct.unpack_from('> B B B x I H', request, 0)
+        (protocol_id, version, command, session_id, request_length) = struct.unpack_from('> B B B x I H', request, 0)
 
         if protocol_id != PROTOCOL_ID:
             raise ProgramError(f'Invalid protocol ID: {protocol_id}')
@@ -208,19 +207,21 @@ class TvsConnection:
         elif session_id != self.session_id:
             raise ProgramError(f'Mismatched session ID: {session_id}')
 
-        while len(request) < (length + 10):
-            request_chunk = self.client_socket.recv((length + 10) - len(request))
+        request = bytes()
+
+        while len(request) < request_length:
+            request_chunk = self.client_socket.recv(request_length - len(request))
 
             if not len(request_chunk):
                 break
 
             request += request_chunk
 
-        if len(request) != (length + 10):
+        if len(request) != request_length:
             raise ProgramError('Truncated request')
 
         elements = {}
-        index = 10
+        index = 0
 
         while index < len(request):
             (tag, length) = struct.unpack_from('> B H', request, index)
@@ -234,7 +235,7 @@ class TvsConnection:
 
             elif tag == ELEMENT_CERTIFICATE:
                 certificate = request[index:index + length]
-                elements[ELEMENT_CERTIFICATE] = bytes(certificate)
+                elements[ELEMENT_CERTIFICATE] = certificate
 
             else:
                 raise ProgramError(f'Unknown element tag: {tag}')
@@ -306,7 +307,7 @@ class TvsConnection:
         logging.info('Roles: %s', row['roles'])
         logging.info('TTL: %d', row['ttl'])
 
-        roles = bytearray()
+        roles = bytes()
 
         for role in row['roles'].split(','):
             if role == 'SAST':
