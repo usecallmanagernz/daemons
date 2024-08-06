@@ -64,15 +64,8 @@ def add_certificate(database, certificate_file, roles, ttl):
     serial_number = serial_number.to_bytes((serial_number.bit_length() + 7) // 8, byteorder = 'big')
     serial_number = binascii.hexlify(serial_number).decode('utf-8')
 
-    subject_name = ''
-
-    for attribute in certificate.subject:
-        subject_name += (';' if len(subject_name) else '') + attribute.rfc4514_string()
-
-    issuer_name = ''
-
-    for attribute in certificate.issuer:
-        issuer_name += (';' if len(issuer_name) else '') + attribute.rfc4514_string()
+    subject_name = ','.join([attribute.rfc4514_string() for attribute in certificate.subject])
+    issuer_name = ','.join([attribute.rfc4514_string() for attribute in certificate.issuer])
 
     certificate_hash = certificate.fingerprint(hashes.SHA256())
     certificate_hash = binascii.hexlify(certificate_hash).decode('utf-8')

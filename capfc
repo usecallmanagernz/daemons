@@ -144,14 +144,12 @@ class CapfClient:
         if certificate is not None:
             certificate = struct.pack('> B H B B', 1, len(certificate) + 2, 0, CERTIFICATE_TYPE_LSC) + certificate
 
-            response += struct.pack('> B H', ELEMENT_CERTIFICATE, len(certificate))
-            response += certificate
+            response += struct.pack('> B H', ELEMENT_CERTIFICATE, len(certificate)) + certificate
 
         signed_data = elements.get(ELEMENT_SIGNED_DATA, None)
 
         if signed_data is not None:
-            response += struct.pack('> B H', ELEMENT_SIGNED_DATA, len(signed_data))
-            response += signed_data
+            response += struct.pack('> B H', ELEMENT_SIGNED_DATA, len(signed_data)) + signed_data
 
         version = elements.get(ELEMENT_VERSION, None)
 
@@ -163,34 +161,29 @@ class CapfClient:
         if password is not None:
             password = password.encode('utf-8') + b'\x00'
 
-            response += struct.pack('> B H', ELEMENT_PASSWORD, len(password))
-            response += password
+            response += struct.pack('> B H', ELEMENT_PASSWORD, len(password)) + password
 
         device_name = elements.get(ELEMENT_DEVICE_NAME, None)
 
         if device_name is not None:
             device_name = device_name.encode('utf-8') + b'\x00'
 
-            response += struct.pack('> B H', ELEMENT_DEVICE_NAME, len(device_name))
-            response += device_name
+            response += struct.pack('> B H', ELEMENT_DEVICE_NAME, len(device_name)) + device_name
 
         sudi_data = elements.get(ELEMENT_SUDI_DATA, None)
 
         if sudi_data is not None:
-            response += struct.pack('> B H', ELEMENT_SUDI_DATA, len(sudi_data))
-            response += sudi_data
+            response += struct.pack('> B H', ELEMENT_SUDI_DATA, len(sudi_data)) + sudi_data
 
         public_key = elements.get(ELEMENT_PUBLIC_KEY, None)
 
         if public_key is not None:
-            response += struct.pack('> B H', ELEMENT_PUBLIC_KEY, len(public_key))
-            response += public_key
+            response += struct.pack('> B H', ELEMENT_PUBLIC_KEY, len(public_key)) + public_key
 
         sha2_signed_data = elements.get(ELEMENT_SHA2_SIGNED_DATA, None)
 
         if sha2_signed_data is not None:
-            response += struct.pack('> B H', ELEMENT_SHA2_SIGNED_DATA, len(sha2_signed_data))
-            response += sha2_signed_data
+            response += struct.pack('> B H', ELEMENT_SHA2_SIGNED_DATA, len(sha2_signed_data)) + sha2_signed_data
 
         self.socket.sendall(struct.pack('> B B I H', PROTOCOL_ID, command, self.session_id, len(response)) + response)
 
@@ -366,6 +359,7 @@ class CapfClient:
             raise ProgramError(f'No RSA or EC private-key in file: {local_certificate_file}')
 
         certificate = certificate.public_bytes(serialization.Encoding.DER)
+
         auth_data = device_name.encode('utf-8') + b'\x00' + certificate
 
         if isinstance(private_key, rsa.RSAPrivateKey):
@@ -418,16 +412,9 @@ class CapfClient:
         signed_data = rsa_key.encrypt(auth_data, hashes.SHA1())
         sha2_signed_data = rsa_key.encrypt(auth_data, hashes.SHA512())
 
-        sudi_data = bytes()
-
-        sudi_data += struct.pack('> B H', 0, len(certificate))
-        sudi_data += certificate
-
-        sudi_data += struct.pack('> B H', HASH_SHA1, len(signed_data))
-        sudi_data += signed_data
-
-        sudi_data += struct.pack('> B H', HASH_SHA512, len(sha2_signed_data))
-        sudi_data += sha2_signed_data
+        sudi_data = (struct.pack('> B H', 0, len(certificate)) + certificate
+                     + struct.pack('> B H', HASH_SHA1, len(signed_data)) + signed_data
+                     + struct.pack('> B H', HASH_SHA512, len(sha2_signed_data)) + sha2_signed_data)
 
         return sudi_data
 
@@ -593,6 +580,7 @@ class RSAKeyEncrypt:
     def encrypt(self, auth_data, hash_algorithm):
         hash = hashes.Hash(hash_algorithm, backends.default_backend())
         hash.update(auth_data)
+
         auth_data_hash = hash.finalize()
 
         auth_data_hash = (ctypes.c_ubyte * len(auth_data_hash)).from_buffer_copy(auth_data_hash)

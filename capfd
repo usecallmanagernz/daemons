@@ -301,8 +301,7 @@ class CapfConnection:
         if certificate is not None:
             certificate = struct.pack('> B H B B', 1, len(certificate) + 2, 0, CERTIFICATE_TYPE_LSC) + certificate
 
-            request += struct.pack('> B H', ELEMENT_CERTIFICATE, len(certificate))
-            request += certificate
+            request += struct.pack('> B H', ELEMENT_CERTIFICATE, len(certificate)) + certificate
 
         version = elements.get(ELEMENT_VERSION, None)
 
@@ -432,7 +431,11 @@ class CapfConnection:
         if certificate is None:
             raise ProgramError('No certificate')
 
-        logging.info('%s Subject Name: %s', type, certificate.subject.rfc4514_string())
+        subject_name = ','.join([attribute.rfc4514_string() for attribute in certificate.subject])
+        issuer_name = ','.join([attribute.rfc4514_string() for attribute in certificate.issuer])
+
+        logging.info('%s Subject Name: %s', type, subject_name)
+        logging.info('%s Issuer Name: %s', type, issuer_name)
 
         for verify_certificate_file in [CapfConnection.issuer_certificate_file] + CapfConnection.verify_certificate_files:
             try:
@@ -462,7 +465,6 @@ class CapfConnection:
             except InvalidSignature:
                 continue
 
-            logging.info('%s Issuer Name: %s', type, verify_certificate.subject.rfc4514_string())
             break
 
         else:
@@ -846,6 +848,7 @@ class RSAKeyDecrypt:
     def decrypt(self, signed_data, auth_data, hash_algorithm):
         hash = hashes.Hash(hash_algorithm, backends.default_backend())
         hash.update(auth_data)
+
         auth_data_hash = hash.finalize()
 
         signed_data = (ctypes.c_ubyte * len(signed_data)).from_buffer_copy(signed_data)

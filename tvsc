@@ -96,14 +96,12 @@ class TvsClient:
         if device_name is not None:
             device_name = b'\x01' + device_name.encode('utf-8')
 
-            request += struct.pack('> B H', ELEMENT_DEVICE_NAME, len(device_name))
-            request += device_name
+            request += struct.pack('> B H', ELEMENT_DEVICE_NAME, len(device_name)) + device_name
 
         certificate = elements.get(ELEMENT_CERTIFICATE, None)
 
         if certificate is not None:
-            request += struct.pack('> B H', ELEMENT_CERTIFICATE, len(certificate))
-            request += certificate
+            request += struct.pack('> B H', ELEMENT_CERTIFICATE, len(certificate)) + certificate
 
         self.socket.sendall(struct.pack('> B B B B I H', PROTOCOL_ID, PROTOCOL_VERSION, command, 0, self.session_id, len(request)) + request)
 
@@ -183,10 +181,6 @@ class TvsClient:
         except ValueError:
             raise ProgramError(f'No certificate in file: {certificate_file}')
 
-        serial_number = certificate.serial_number
-        serial_number = serial_number.to_bytes((serial_number.bit_length() + 7) // 8, byteorder = 'big')
-        serial_number = binascii.hexlify(serial_number).decode('utf-8')
-
         TvsClient.session_id += 1
         self.session_id = TvsClient.session_id
 
@@ -200,25 +194,19 @@ class TvsClient:
         if command != COMMAND_VERIFY_RESPONSE:
             raise ProgramError(f'Unexpected command: {command}')
 
-        print(f'Serial Number:    {serial_number}')
+        serial_number = certificate.serial_number
+        serial_number = serial_number.to_bytes((serial_number.bit_length() + 7) // 8, byteorder = 'big')
+        serial_number = binascii.hexlify(serial_number).decode('utf-8')
 
-        subject_name = ''
-
-        for attribute in certificate.subject:
-            subject_name += (';' if len(subject_name) else '') + attribute.rfc4514_string()
-
-        print(f'Subject Name:     {subject_name}')
-
-        issuer_name = ''
-
-        for attribute in certificate.issuer:
-            issuer_name += (';' if len(issuer_name) else '') + attribute.rfc4514_string()
-
-        print(f'Issuer Name:      {issuer_name}')
+        subject_name = ','.join([attribute.rfc4514_string() for attribute in certificate.subject])
+        issuer_name = ','.join([attribute.rfc4514_string() for attribute in certificate.issuer])
 
         certificate_hash = certificate.fingerprint(hashes.SHA256())
         certificate_hash = binascii.hexlify(certificate_hash).decode('utf-8')
 
+        print(f'Subject Name:     {subject_name}')
+        print(f'Issuer Name:      {issuer_name}')
+        print(f'Serial Number:    {serial_number}')
         print(f'Certificate Hash: {certificate_hash}')
 
         status = elements.get(ELEMENT_STATUS, None)
