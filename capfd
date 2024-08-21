@@ -437,7 +437,7 @@ class CapfConnection:
         logging.info('%s Subject Name: %s', type, subject_name)
         logging.info('%s Issuer Name: %s', type, issuer_name)
 
-        for verify_certificate_file in [CapfConnection.issuer_certificate_file] + CapfConnection.verify_certificate_files:
+        for verify_certificate_file in CapfConnection.issuer_certificate_file, *CapfConnection.verify_certificate_files:
             try:
                 with open(verify_certificate_file, 'rb') as file:
                     verify_certificate = file.read()
