@@ -744,6 +744,9 @@ class CapfConnection:
                 raise ProgramError('Invalid certificate')
 
             serial_number = certificate.serial_number
+            serial_number = serial_number.to_bytes((serial_number.bit_length() + 7) // 8, byteorder = 'big')
+            serial_number = binascii.hexlify(serial_number).decode('utf-8')
+
             not_valid_before = certificate.not_valid_before
             not_valid_after = certificate.not_valid_after
 
@@ -752,7 +755,7 @@ class CapfConnection:
             cursor.execute('UPDATE devices SET operation = ?, serial_number = ?, certificate = ?, not_valid_before = ?, not_valid_after = ? '
                            'WHERE device_name = ?',
                            ('none',
-                            binascii.hexlify(serial_number.to_bytes((serial_number.bit_length() + 7) // 8, byteorder = 'big')).decode('utf-8'),
+                            serial_number,
                             certificate.public_bytes(serialization.Encoding.PEM),
                             not_valid_before.strftime('%Y-%m-%d %H:%M:%S'),
                             not_valid_after.strftime('%Y-%m-%d %H:%M:%S'),
