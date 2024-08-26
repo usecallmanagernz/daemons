@@ -17,7 +17,6 @@ import signal
 import logging
 from datetime import datetime, timezone, timedelta
 import struct
-import ctypes
 import binascii
 import sqlite3
 
@@ -501,15 +500,13 @@ class CapfConnection:
         auth_data = device_name.encode('utf-8') + b'\x00' + certificate.public_bytes(serialization.Encoding.DER)
 
         if isinstance(public_key, rsa.RSAPublicKey):
-            rsa_key = RSAKeyDecrypt(public_key)
-
             try:
-                rsa_key.decrypt(signed_data, auth_data, hashes.SHA1())
+                self.rsa_public_decrypt(public_key, signed_data, auth_data, hashes.SHA1())
             except ValueError:
                 raise ProgramError('Invalid RSA signed-data')
 
             try:
-                rsa_key.decrypt(sha2_signed_data, auth_data, hashes.SHA512())
+                self.rsa_public_decrypt(public_key, sha2_signed_data, auth_data, hashes.SHA512())
             except ValueError:
                 raise ProgramError('Invalid RSA SHA2 signed-data')
 
@@ -566,17 +563,33 @@ class CapfConnection:
         # Cisco's CAPF server uses whatever the host's endianess is so the session ID is encoded as little-endian
         auth_data = struct.pack('< I', self.session_id) + certificate.public_bytes(serialization.Encoding.DER)
 
-        rsa_key = RSAKeyDecrypt(public_key)
-
         try:
-            rsa_key.decrypt(signed_data, auth_data, hashes.SHA1())
+            self.rsa_public_decrypt(public_key, signed_data, auth_data, hashes.SHA1())
         except ValueError:
             raise ProgramError('Invalid SUDI RSA signed-data')
 
         try:
-            rsa_key.decrypt(sha2_signed_data, auth_data, hashes.SHA512())
+            self.rsa_public_decrypt(public_key, sha2_signed_data, auth_data, hashes.SHA512())
         except ValueError:
             raise ProgramError('Invalid SUDI RSA SHA2 signed-data')
+
+    def rsa_public_decrypt(self, public_key, signed_data, auth_data, hash_algorithm):
+        public_numbers = public_key.public_numbers()
+
+        hash = hashes.Hash(hash_algorithm, backends.default_backend())
+        hash.update(auth_data)
+
+        auth_data_hash = hash.finalize()
+
+        signed_data = int.from_bytes(signed_data, byteorder = 'big')
+        signed_data = pow(signed_data, public_numbers.e, public_numbers.n)
+        signed_data = signed_data.to_bytes(public_key.key_size // 8, byteorder = 'big')
+
+        # Remove PKCS1 type 1 padding
+        signed_data = signed_data[-len(auth_data_hash):]
+
+        if signed_data != auth_data_hash:
+            raise ValueError
 
     def install_certificate(self, device_name, key_size, curve_name, database):
         if key_size:
@@ -812,74 +825,6 @@ class CapfConnection:
             logging.info('Result: Deleted certificate')
 
         self.send_request(COMMAND_END_SESSION, {ELEMENT_REASON: REASON_UPDATE_CERTIFICATE})
-
-
-class RSAKeyDecrypt:
-    # The cryptography module no longer exports deprecated RSA methods so they have to be imported from libcrypto manually
-    libcrypto = ctypes.cdll.LoadLibrary("libcrypto.so")
-
-    libcrypto.ERR_get_error.argtypes = []
-    libcrypto.ERR_get_error.restype = ctypes.c_long
-
-    libcrypto.ERR_error_string.argtypes = [ctypes.c_long, ctypes.c_char_p]
-    libcrypto.ERR_error_string.restype = ctypes.c_char_p
-
-    libcrypto.d2i_RSAPublicKey.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)), ctypes.c_long]
-    libcrypto.d2i_RSAPublicKey.restype = ctypes.c_void_p
-
-    libcrypto.RSA_free.argtypes = [ctypes.c_void_p]
-    libcrypto.RSA_free.restype = None
-
-    libcrypto.RSA_size.argtypes = [ctypes.c_void_p]
-    libcrypto.RSA_size.restype = ctypes.c_int
-
-    libcrypto.RSA_public_decrypt.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_ubyte), ctypes.POINTER(ctypes.c_ubyte), ctypes.c_void_p, ctypes.c_int]
-    libcrypto.RSA_public_decrypt.restype = ctypes.c_int
-
-    libcrypto.RSA_PKCS1_PADDING = 1
-
-    def __init__(self, public_key):
-        public_key = public_key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.PKCS1)
-        public_key = (ctypes.c_ubyte * len(public_key)).from_buffer_copy(public_key)
-
-        self.rsa_key = self.libcrypto.d2i_RSAPublicKey(ctypes.byref(ctypes.c_void_p()),
-                                                       ctypes.byref(ctypes.cast(public_key, ctypes.POINTER(ctypes.c_ubyte))),
-                                                       len(public_key))
-
-        if self.rsa_key is None:
-            error = self.libcrypto.ERR_get_error()
-            error = bytes(self.libcrypto.ERR_error_string(error, ctypes.c_char_p())).decode('utf-8')
-
-            raise ValueError(error)
-
-    def __del__(self):
-        if self.rsa_key is not None:
-            self.libcrypto.RSA_free(self.rsa_key)
-
-    def decrypt(self, signed_data, auth_data, hash_algorithm):
-        hash = hashes.Hash(hash_algorithm, backends.default_backend())
-        hash.update(auth_data)
-
-        auth_data_hash = hash.finalize()
-
-        signed_data = (ctypes.c_ubyte * len(signed_data)).from_buffer_copy(signed_data)
-        signed_data_hash = (ctypes.c_ubyte * self.libcrypto.RSA_size(self.rsa_key))()
-
-        if self.libcrypto.RSA_public_decrypt(len(signed_data),
-                                             ctypes.cast(signed_data, ctypes.POINTER(ctypes.c_ubyte)),
-                                             ctypes.cast(signed_data_hash, ctypes.POINTER(ctypes.c_ubyte)),
-                                             self.rsa_key,
-                                             self.libcrypto.RSA_PKCS1_PADDING) == -1:
-            error = self.libcrypto.ERR_get_error()
-            error = bytes(self.libcrypto.ERR_error_string(error, ctypes.c_char_p())).decode('utf-8')
-
-            raise ValueError(error)
-
-        signed_data_hash = bytes(signed_data_hash)
-        signed_data_hash = signed_data_hash[:len(auth_data_hash)]
-
-        if signed_data_hash != auth_data_hash:
-            raise ValueError('Mismatch between signed-hash and auth-hash')
 
 
 def main():

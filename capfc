@@ -12,7 +12,6 @@ import traceback
 import socket
 import ssl
 import struct
-import ctypes
 
 from cryptography import x509
 from cryptography.hazmat import backends
@@ -363,10 +362,8 @@ class CapfClient:
         auth_data = device_name.encode('utf-8') + b'\x00' + certificate
 
         if isinstance(private_key, rsa.RSAPrivateKey):
-            rsa_key = RSAKeyEncrypt(private_key)
-
-            signed_data = rsa_key.encrypt(auth_data, hashes.SHA1())
-            sha2_signed_data = rsa_key.encrypt(auth_data, hashes.SHA512())
+            signed_data = self.rsa_private_encrypt(private_key, auth_data, hashes.SHA1())
+            sha2_signed_data = self.rsa_private_encrypt(private_key, auth_data, hashes.SHA512())
 
         elif isinstance(private_key, ec.EllipticCurvePrivateKey):
             signed_data = private_key.sign(auth_data, ec.ECDSA(hashes.SHA1()))
@@ -407,16 +404,34 @@ class CapfClient:
         # Cisco's CAPF server uses whatever the host's endianess is so the session ID is encoded as little-endian
         auth_data = struct.pack('< I', self.session_id) + certificate
 
-        rsa_key = RSAKeyEncrypt(private_key)
-
-        signed_data = rsa_key.encrypt(auth_data, hashes.SHA1())
-        sha2_signed_data = rsa_key.encrypt(auth_data, hashes.SHA512())
+        signed_data = self.rsa_private_encrypt(private_key, auth_data, hashes.SHA1())
+        sha2_signed_data = self.rsa_private_encrypt(private_key, auth_data, hashes.SHA512())
 
         sudi_data = (struct.pack('> B H', 0, len(certificate)) + certificate
                      + struct.pack('> B H', HASH_SHA1, len(signed_data)) + signed_data
                      + struct.pack('> B H', HASH_SHA512, len(sha2_signed_data)) + sha2_signed_data)
 
         return sudi_data
+
+    def rsa_private_encrypt(self, private_key, auth_data, hash_algorithm):
+        private_numbers = private_key.private_numbers()
+
+        hash = hashes.Hash(hash_algorithm)
+        hash.update(auth_data)
+
+        auth_data_hash = hash.finalize()
+
+        # Add PKCS1 type 1 padding
+        auth_data = b'\x00\x01'
+        auth_data += ((private_key.key_size // 8) - 3 - len(auth_data_hash)) * b'\xff'
+        auth_data += b'\x00' + auth_data_hash
+
+        auth_data = int.from_bytes(auth_data, byteorder = 'big')
+
+        signed_data = pow(auth_data, private_numbers.d, private_numbers.p * private_numbers.q)
+        signed_data = signed_data.to_bytes(private_key.key_size // 8, byteorder = 'big')
+
+        return signed_data
 
     def generate_key(self, key_type, key_size, curve, certificate_file):
         self.send_response(COMMAND_REQUEST_IN_PROGRESS, {})
@@ -533,72 +548,6 @@ class CapfClient:
 
         if command != COMMAND_END_SESSION:
             raise ProgramError(f'Unexpected command: {command}')
-
-
-class RSAKeyEncrypt:
-    # The cryptography module no longer exports deprecated RSA methods so they have to be imported from libcrypto manually
-    libcrypto = ctypes.cdll.LoadLibrary("libcrypto.so")
-
-    libcrypto.ERR_get_error.argtypes = []
-    libcrypto.ERR_get_error.restype = ctypes.c_long
-
-    libcrypto.ERR_error_string.argtypes = [ctypes.c_long, ctypes.c_char_p]
-    libcrypto.ERR_error_string.restype = ctypes.c_char_p
-
-    libcrypto.d2i_RSAPrivateKey.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)), ctypes.c_long]
-    libcrypto.d2i_RSAPrivateKey.restype = ctypes.c_void_p
-
-    libcrypto.RSA_free.argtypes = [ctypes.c_void_p]
-    libcrypto.RSA_free.restype = None
-
-    libcrypto.RSA_size.argtypes = [ctypes.c_void_p]
-    libcrypto.RSA_size.restype = ctypes.c_int
-
-    libcrypto.RSA_private_encrypt.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_ubyte), ctypes.POINTER(ctypes.c_ubyte), ctypes.c_void_p, ctypes.c_int]
-    libcrypto.RSA_private_encrypt.restype = ctypes.c_int
-
-    libcrypto.RSA_PKCS1_PADDING = 1
-
-    def __init__(self, private_key):
-        private_key = private_key.private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption())
-        private_key = (ctypes.c_ubyte * len(private_key)).from_buffer_copy(private_key)
-
-        self.rsa_key = self.libcrypto.d2i_RSAPrivateKey(ctypes.byref(ctypes.c_void_p()),
-                                                        ctypes.byref(ctypes.cast(private_key, ctypes.POINTER(ctypes.c_ubyte))),
-                                                        len(private_key))
-
-        if self.rsa_key is None:
-            error = self.libcrypto.ERR_get_error()
-            error = bytes(self.libcrypto.ERR_error_string(error, ctypes.c_char_p())).decode('utf-8')
-
-            raise ValueError(error)
-
-    def __del__(self):
-        if self.rsa_key is not None:
-            self.libcrypto.RSA_free(self.rsa_key)
-
-    def encrypt(self, auth_data, hash_algorithm):
-        hash = hashes.Hash(hash_algorithm, backends.default_backend())
-        hash.update(auth_data)
-
-        auth_data_hash = hash.finalize()
-
-        auth_data_hash = (ctypes.c_ubyte * len(auth_data_hash)).from_buffer_copy(auth_data_hash)
-        signed_data = (ctypes.c_ubyte * self.libcrypto.RSA_size(self.rsa_key))()
-
-        if self.libcrypto.RSA_private_encrypt(len(auth_data_hash),
-                                              ctypes.cast(auth_data_hash, ctypes.POINTER(ctypes.c_ubyte)),
-                                              ctypes.cast(signed_data, ctypes.POINTER(ctypes.c_ubyte)),
-                                              self.rsa_key,
-                                              self.libcrypto.RSA_PKCS1_PADDING) == -1:
-            error = self.libcrypto.ERR_get_error()
-            error = bytes(self.libcrypto.ERR_error_string(error, ctypes.c_char_p())).decode('utf-8')
-
-            raise ValueError(error)
-
-        signed_data = bytes(signed_data)
-
-        return signed_data
 
 
 def main():
