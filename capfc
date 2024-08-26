@@ -407,9 +407,9 @@ class CapfClient:
         signed_data = self.rsa_private_encrypt(private_key, auth_data, hashes.SHA1())
         sha2_signed_data = self.rsa_private_encrypt(private_key, auth_data, hashes.SHA512())
 
-        sudi_data = (struct.pack('> B H', 0, len(certificate)) + certificate
-                     + struct.pack('> B H', HASH_SHA1, len(signed_data)) + signed_data
-                     + struct.pack('> B H', HASH_SHA512, len(sha2_signed_data)) + sha2_signed_data)
+        sudi_data = (struct.pack('> B H', 0, len(certificate)) + certificate +
+                     struct.pack('> B H', HASH_SHA1, len(signed_data)) + signed_data +
+                     struct.pack('> B H', HASH_SHA512, len(sha2_signed_data)) + sha2_signed_data)
 
         return sudi_data
 
@@ -422,10 +422,7 @@ class CapfClient:
         auth_data_hash = hash.finalize()
 
         # Add PKCS1 type 1 padding
-        auth_data = b'\x00\x01'
-        auth_data += ((private_key.key_size // 8) - 3 - len(auth_data_hash)) * b'\xff'
-        auth_data += b'\x00' + auth_data_hash
-
+        auth_data = b'\x00\x01' + (((private_key.key_size // 8) - 3 - len(auth_data_hash)) * b'\xff') + b'\x00' + auth_data_hash
         auth_data = int.from_bytes(auth_data, byteorder = 'big')
 
         signed_data = pow(auth_data, private_numbers.d, private_numbers.p * private_numbers.q)
