@@ -2,7 +2,7 @@
 persistent=no
 
 [MESSAGES CONTROL]
-disable=missing-module-docstring,missing-class-docstring,missing-function-docstring,bad-whitespace,line-too-long,too-many-locals,too-many-lines,len-as-condition,too-many-branches,too-many-arguments,redefined-builtin,too-many-locals,broad-except,too-many-nested-blocks,consider-using-sys-exit,too-many-statements,no-self-use,invalid-name,duplicate-code,unnecessary-lambda,protected-access,raise-missing-from
+disable=missing-module-docstring,missing-class-docstring,missing-function-docstring,line-too-long,too-many-locals,too-many-lines,len-as-condition,too-many-branches,too-many-arguments,redefined-builtin,too-many-locals,broad-except,too-many-nested-blocks,consider-using-sys-exit,too-many-statements,no-self-use,invalid-name,duplicate-code,unnecessary-lambda,protected-access,raise-missing-from
 
 [REPORTS]
 output-format=text
