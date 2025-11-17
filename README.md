@@ -11,8 +11,8 @@ Services and clients that do security services for phones
 * `capfctl` - Manage the device database used by `capfd`
 * `capfc` - Client that can send CAPF requests.
 
-See [Trust Verification](http://usecallmanager.nz/trust-verification.html) and
-[Certificate Enrollment](http://usecallmanager.nz/certificate-enrollment.html)
+See [Trust Verification](https://usecallmanager.nz/trust-verification.html) and
+[Certificate Enrollment](https://usecallmanager.nz/certificate-enrollment.html)
 for example usage.
 
 ## Requirements
