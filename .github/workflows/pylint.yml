@@ -43,6 +43,7 @@ jobs:
 
       - name: Install packages
         run: |
+          sudo apt update
           sudo apt install pylint python3-cryptography
 
       - name: Run pylint 
