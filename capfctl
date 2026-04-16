@@ -70,8 +70,8 @@ def set_device_operation(database, device_name, operation, authentication, passw
 def remove_device(database, device_name):
     cursor = database.cursor()
 
-    # RETURNING clause only available in sqlite >= 3.35
-    cursor.execute('SELECT device_name FROM devices WHERE device_name = ?',
+    cursor.execute('DELETE FROM devices WHERE device_name = ? '
+                   'RETURNING device_name',
                    (device_name,))
 
     row = cursor.fetchone()
@@ -79,9 +79,6 @@ def remove_device(database, device_name):
     if row is None:
         print('Device', device_name, 'does not exist')
         return
-
-    cursor.execute('DELETE FROM devices WHERE device_name = ?',
-                   (row['device_name'],))
 
     print('Removed', row['device_name'])
 

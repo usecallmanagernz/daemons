@@ -92,18 +92,15 @@ def add_certificate(database, certificate_file, roles, ttl):
 def remove_certificate(database, certificate_hash):
     cursor = database.cursor()
 
-    # RETURNING clause only available in sqlite >= 3.35
-    cursor.execute('SELECT certificate_hash, subject_name, roles FROM certificates WHERE certificate_hash LIKE ?',
-                   (certificate_hash + '%',))
+    cursor.execute('DELETE FROM certificates WHERE certificate_hash = ? '
+                   'RETURNING certificate_hash, subject_name, roles',
+                   (certificate_hash,))
 
     row = cursor.fetchone()
 
     if row is None:
-        print(f'No certificate matching: {certificate_hash}')
+        print('No certificate matching', certificate_hash)
         return
-
-    cursor.execute('DELETE FROM certificates WHERE certificate_hash = ?',
-                   (row['certificate_hash'],))
 
     database.commit()
 
@@ -119,7 +116,7 @@ def export_certificate(database, certificate_hash):
     row = cursor.fetchone()
 
     if row is None:
-        print(f'No certificate matching: {certificate_hash}')
+        print('No certificate matching', certificate_hash)
         return
 
     print(row['certificate'].decode('utf-8'), end = '')
@@ -225,7 +222,7 @@ def main():
                   '\n'
                   '  -l, --list                list certificates\n'
                   '  -a, --add CERT-FILE       add certificate and roles into database\n'
-                  '  -d, --delete CERT-HASH    delete certificate from database\n'
+                  '  -r, --remove CERT-HASH    remove certificate from database\n'
                   '  -e, --export CERT-HASH    export certificate from database\n'
                   '  -L, --ttl SECONDS         response TTL: from 1 to 2592000 (default 3600)\n'
                   '  -s, --sast                include SAST role\n'
