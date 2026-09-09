@@ -23,7 +23,6 @@ import sqlite3
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 from cryptography.x509 import oid
-from cryptography.hazmat import backends
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa, ec
 
@@ -451,7 +450,7 @@ class CapfConnection:
                 raise ProgramError(f'{error.strerror}: {error.filename}')
 
             try:
-                verify_certificate = x509.load_pem_x509_certificate(verify_certificate, backends.default_backend())
+                verify_certificate = x509.load_pem_x509_certificate(verify_certificate)
             except ValueError:
                 raise ProgramError('Invalid verify certificate')
 
@@ -486,7 +485,7 @@ class CapfConnection:
             raise ProgramError('No SHA2 signed-data')
 
         try:
-            certificate = x509.load_der_x509_certificate(certificate, backends.default_backend())
+            certificate = x509.load_der_x509_certificate(certificate)
         except ValueError:
             raise ProgramError('Invalid certificate')
 
@@ -555,7 +554,7 @@ class CapfConnection:
             raise ProgramError(f'Invalid SHA2 hash-algorithm: {hash_algorithm}')
 
         try:
-            certificate = x509.load_der_x509_certificate(certificate, backends.default_backend())
+            certificate = x509.load_der_x509_certificate(certificate)
         except ValueError:
             raise ProgramError('Invalid SUDI certificate')
 
@@ -582,7 +581,7 @@ class CapfConnection:
     def rsa_public_decrypt(self, public_key, signed_data, auth_data, hash_algorithm):
         public_numbers = public_key.public_numbers()
 
-        hash = hashes.Hash(hash_algorithm, backends.default_backend())
+        hash = hashes.Hash(hash_algorithm)
         hash.update(auth_data)
 
         auth_data_hash = hash.finalize()
@@ -650,12 +649,12 @@ class CapfConnection:
             raise ProgramError(f'{error.strerror}: {error.filename}')
 
         try:
-            issuer_certificate = x509.load_pem_x509_certificate(issuer_certificate, backends.default_backend())
+            issuer_certificate = x509.load_pem_x509_certificate(issuer_certificate)
         except ValueError:
             raise ProgramError(f'No certificate in file: {self.issuer_certificate_file}')
 
         try:
-            issuer_private_key = serialization.load_pem_private_key(issuer_private_key, None, backends.default_backend())
+            issuer_private_key = serialization.load_pem_private_key(issuer_private_key, None)
         except ValueError:
             raise ProgramError(f'No private key in file: {self.issuer_certificate_file}')
 
@@ -671,7 +670,7 @@ class CapfConnection:
         builder = builder.subject_name(x509.Name(subject_name))
         builder = builder.issuer_name(issuer_certificate.issuer)
 
-        public_key = serialization.load_der_public_key(public_key, backends.default_backend())
+        public_key = serialization.load_der_public_key(public_key)
         builder = builder.public_key(public_key)
 
         serial_number = int.from_bytes(os.urandom(16), byteorder = 'big')
@@ -700,7 +699,7 @@ class CapfConnection:
         subject_alt_name = x509.SubjectAlternativeName([x509.UniformResourceIdentifier(device_name)])
         builder = builder.add_extension(subject_alt_name, critical = False)
 
-        certificate = builder.sign(issuer_private_key, hashes.SHA256(), backends.default_backend())
+        certificate = builder.sign(issuer_private_key, hashes.SHA256())
 
         serial_number = certificate.serial_number
         serial_number = serial_number.to_bytes((serial_number.bit_length() + 7) // 8, byteorder = 'big')
@@ -766,7 +765,7 @@ class CapfConnection:
                 raise ProgramError('Missing certificate element')
 
             try:
-                certificate = x509.load_der_x509_certificate(certificate, backends.default_backend())
+                certificate = x509.load_der_x509_certificate(certificate)
             except ValueError:
                 raise ProgramError('Invalid certificate')
 

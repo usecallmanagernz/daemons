@@ -14,7 +14,6 @@ import ssl
 import struct
 
 from cryptography import x509
-from cryptography.hazmat import backends
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, ec
 
@@ -340,7 +339,7 @@ class CapfClient:
             raise ProgramError(f'{error.strerror}: {error.filename}')
 
         try:
-            certificate = x509.load_pem_x509_certificate(certificate, backends.default_backend())
+            certificate = x509.load_pem_x509_certificate(certificate)
         except ValueError:
             raise ProgramError(f'No certificate in file: {local_certificate_file}')
 
@@ -350,7 +349,7 @@ class CapfClient:
             raise ProgramError(f'No RSA or EC public-key in file: {local_certificate_file}')
 
         try:
-            private_key = serialization.load_pem_private_key(private_key, None, backends.default_backend())
+            private_key = serialization.load_pem_private_key(private_key, None)
         except ValueError:
             raise ProgramError(f'No private-key in file: {local_certificate_file}')
 
@@ -382,7 +381,7 @@ class CapfClient:
             raise ProgramError(f'{error.strerror}: {error.filename}')
 
         try:
-            certificate = x509.load_pem_x509_certificate(certificate, backends.default_backend())
+            certificate = x509.load_pem_x509_certificate(certificate)
         except ValueError:
             raise ProgramError(f'No certificate in file: {sudi_certificate_file}')
 
@@ -392,7 +391,7 @@ class CapfClient:
             raise ProgramError(f'No RSA public-key in file: {sudi_certificate_file}')
 
         try:
-            private_key = serialization.load_pem_private_key(private_key, None, backends.default_backend())
+            private_key = serialization.load_pem_private_key(private_key, None)
         except ValueError:
             raise ProgramError(f'No private-key in file: {sudi_certificate_file}')
 
@@ -437,7 +436,7 @@ class CapfClient:
             if key_size not in (512, 1024, 2048, 3072, 4096):
                 raise ProgramError(f'Invalid key-size: {key_size}')
 
-            private_key = rsa.generate_private_key(65537, key_size, backends.default_backend())
+            private_key = rsa.generate_private_key(65537, key_size)
 
         elif key_type == KEY_TYPE_EC:
             if curve == CURVE_SECP256R1:
@@ -449,7 +448,7 @@ class CapfClient:
             else:
                 raise ProgramError(f'Invalid curve: {curve}')
 
-            private_key = ec.generate_private_key(curve_algorithm, backends.default_backend())
+            private_key = ec.generate_private_key(curve_algorithm)
 
         else:
             raise ProgramError(f'Invalid key-type: {key_type}')
@@ -471,7 +470,7 @@ class CapfClient:
             raise ProgramError('Missing certificate element')
 
         try:
-            certificate = x509.load_der_x509_certificate(certificate, backends.default_backend())
+            certificate = x509.load_der_x509_certificate(certificate)
         except ValueError:
             raise ProgramError('Invalid certificate')
 
@@ -504,7 +503,7 @@ class CapfClient:
                 raise ProgramError(f'{error.strerror}: {error.filename}')
 
             try:
-                certificate = x509.load_pem_x509_certificate(certificate, backends.default_backend())
+                certificate = x509.load_pem_x509_certificate(certificate)
             except ValueError:
                 raise ProgramError('Invalid certificate')
 

@@ -15,7 +15,6 @@ import struct
 import binascii
 
 from cryptography import x509
-from cryptography.hazmat import backends
 from cryptography.hazmat.primitives import serialization, hashes
 
 
@@ -177,7 +176,7 @@ class TvsClient:
             raise ProgramError(f'{error.strerror}: {error.filename}')
 
         try:
-            certificate = x509.load_pem_x509_certificate(certificate, backends.default_backend())
+            certificate = x509.load_pem_x509_certificate(certificate)
         except ValueError:
             raise ProgramError(f'No certificate in file: {certificate_file}')
 

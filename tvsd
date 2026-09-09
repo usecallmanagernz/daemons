@@ -16,7 +16,6 @@ import binascii
 import sqlite3
 
 from cryptography import x509
-from cryptography.hazmat import backends
 from cryptography.hazmat.primitives import hashes
 
 
@@ -266,7 +265,7 @@ class TvsConnection:
             raise ProgramError('Missing certificate element')
 
         try:
-            certificate = x509.load_der_x509_certificate(certificate, backends.default_backend())
+            certificate = x509.load_der_x509_certificate(certificate)
         except ValueError:
             raise ProgramError('Invalid certificate')
 
